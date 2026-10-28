@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  '@tailwindcss/oxide': true
+  bufferutil: false
+  msgpackr-extract: false
+  utf-8-validate: false

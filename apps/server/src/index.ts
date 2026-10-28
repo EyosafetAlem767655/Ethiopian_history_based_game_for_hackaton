@@ -1,0 +1,300 @@
+﻿import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
+import { Server } from '@colyseus/core';
+import { WebSocketTransport } from '@colyseus/ws-transport';
+import { z } from 'zod';
+import { verifyMessage } from 'viem';
+import { registerHostedRoutes, exchangeHosted, isHosted, syncHosted } from './hosted';
+import { BaseAttestation, processOutbox } from './attestation';
+import { BattleRoom } from './room';
+import { SquadLobby } from './lobby';
+import {
+  authenticate,
+  createProfile,
+  token,
+  profile,
+  history,
+  badges,
+  db,
+  digest,
+  saveProfile,
+  issueBadge,
+} from './store';
+const app = express();
+app.use(cors({ origin: (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(',') }));
+app.use(express.json({ limit: '32kb' }));
+const limits = new Map<string, { n: number; time: number }>();
+app.use((req, res, next) => {
+  const key = req.ip ?? 'local',
+    now = Date.now();
+  let entry = limits.get(key);
+  if (!entry || now - entry.time > 60000) {
+    entry = { n: 0, time: now };
+    limits.set(key, entry);
+  }
+  if (++entry.n > 300) {
+    res.status(429).json({ error: 'Slow down' });
+    return;
+  }
+  next();
+});
+setInterval(() => {
+  for (const [k, v] of limits) if (Date.now() - v.time > 60000) limits.delete(k);
+}, 60000).unref();
+app.get('/api/health', (_q, r) =>
+  r.json({
+    ok: true,
+    identity: 'local-guest',
+    persistence: 'sqlite',
+    blockchain: 'simulated',
+    tickRate: 30,
+  }),
+);
+app.post('/api/session', (q, r) => {
+  const parsed = z
+    .object({
+      name: z
+        .string()
+        .trim()
+        .min(2)
+        .max(20)
+        .regex(/^[\p{L}\p{N} _-]+$/u),
+      demo: z.boolean(),
+    })
+    .safeParse(q.body);
+  if (!parsed.success) {
+    r.status(400).json({ error: 'Use a nickname of 2–20 letters or numbers' });
+    return;
+  }
+  if (parsed.data.demo && process.env.ENABLE_DEMO === 'false') {
+    r.status(403).json({ error: 'Demo disabled' });
+    return;
+  }
+  const p = createProfile(parsed.data.name, parsed.data.demo);
+  r.json({ token: token(p), profile: p });
+});
+app.post('/api/session/supabase', async (q, r) => {
+  try {
+    const v = z
+      .object({ accessToken: z.string().min(10), name: z.string().trim().min(2).max(20) })
+      .parse(q.body);
+    r.json(await exchangeHosted(v.accessToken, v.name));
+  } catch (e) {
+    r.status(401).json({ error: (e as Error).message });
+  }
+});
+app.use('/api', (q, r, next) => {
+  try {
+    r.locals.player = authenticate(q.headers.authorization?.replace('Bearer ', ''));
+    next();
+  } catch {
+    r.status(401).json({ error: 'Sign in again' });
+  }
+});
+app.get('/api/me', (_q, r) => {
+  const p = profile(r.locals.player.id)!;
+  const wallet = db.prepare('SELECT address FROM wallets WHERE player_id=?').get(p.id) as any;
+  r.json({
+    profile: p,
+    identity: isHosted(p.id) ? 'supabase' : 'local-guest',
+    badges: badges(p.id),
+    history: history(p.id),
+    wallet: wallet
+      ? { status: 'verified', address: wallet.address }
+      : { status: 'pending', label: 'Wallet not connected' },
+  });
+});
+app.post('/api/wallet/nonce', (_q, r) => {
+  const nonce = `Ethiopian Knights wallet binding\nPlayer: ${r.locals.player.id}\nNonce: ${randomUUID()}\nThis signature links your wallet. It does not authorize transactions.`;
+  db.prepare('INSERT OR REPLACE INTO wallet_nonces VALUES (?,?,?)').run(
+    r.locals.player.id,
+    nonce,
+    Date.now() + 300000,
+  );
+  r.json({ message: nonce });
+});
+app.post('/api/wallet/bind', async (q, r) => {
+  try {
+    const { address, signature } = z
+      .object({
+        address: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+        signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
+      })
+      .parse(q.body);
+    const row = db
+      .prepare('SELECT * FROM wallet_nonces WHERE player_id=?')
+      .get(r.locals.player.id) as any;
+    if (!row || row.expires < Date.now()) throw Error('Request a fresh signing challenge');
+    if (
+      !(await verifyMessage({
+        address: address as `0x${string}`,
+        message: row.nonce,
+        signature: signature as `0x${string}`,
+      }))
+    )
+      throw Error('Wallet signature invalid');
+    db.transaction(() => {
+      db.prepare('INSERT OR REPLACE INTO wallets VALUES (?,?)').run(
+        r.locals.player.id,
+        address.toLowerCase(),
+      );
+      db.prepare('DELETE FROM wallet_nonces WHERE player_id=?').run(r.locals.player.id);
+    })();
+    r.json({ verified: true, address });
+  } catch (e) {
+    r.status(400).json({ error: (e as Error).message });
+  }
+});
+registerHostedRoutes(app);
+app.get('/api/pass/:id', (q, r) => {
+  const s = db
+    .prepare('SELECT * FROM squads WHERE id=? AND demo=?')
+    .get(q.params.id, r.locals.player.demo) as any;
+  if (!s || !JSON.parse(s.members).includes(r.locals.player.id)) {
+    r.status(403).json({ error: 'Sign in as a member of this squad to view the pass' });
+    return;
+  }
+  r.json({
+    ...s,
+    members: JSON.parse(s.members).map((id: string) => ({ id, name: profile(id)?.name })),
+    passId: 'royal-' + s.id,
+    claimed: s.wins >= (s.demo ? 1 : 2) && s.rating >= (s.demo ? 0 : 1100),
+    redeemed: false,
+    redeemable: false,
+  });
+});
+app.get('/api/leaderboard', (_q, r) => {
+  const rows = db
+    .prepare(
+      "SELECT id,name,progress FROM profiles WHERE demo=? ORDER BY json_extract(progress,'rating') DESC LIMIT 30",
+    )
+    .all(r.locals.player.demo);
+  r.json(rows.map((p: any) => ({ ...p, progress: JSON.parse(p.progress) })));
+});
+app.post('/api/squad', (q, r) => {
+  const p = r.locals.player;
+  const existing = db.prepare('SELECT * FROM squads WHERE demo=?').all(p.demo) as any[];
+  let squad: any;
+  if (typeof q.body.code === 'string') {
+    squad = existing.find((s) => s.code === q.body.code.toUpperCase());
+    if (!squad) {
+      r.status(404).json({ error: 'Invite code not found' });
+      return;
+    }
+    const members = JSON.parse(squad.members);
+    if (!members.includes(p.id)) {
+      if (members.length >= 4) {
+        r.status(409).json({ error: 'Squad is full' });
+        return;
+      }
+      members.push(p.id);
+      squad.members = JSON.stringify(members);
+      db.transaction(() => {
+        for (const previous of existing) {
+          if (previous.id !== squad.id && JSON.parse(previous.members).includes(p.id)) {
+            const remaining = JSON.parse(previous.members).filter((id: string) => id !== p.id);
+            db.prepare('UPDATE squads SET members=? WHERE id=?').run(
+              JSON.stringify(remaining),
+              previous.id,
+            );
+          }
+        }
+        db.prepare('UPDATE squads SET members=? WHERE id=?').run(squad.members, squad.id);
+      })();
+    }
+  } else {
+    squad = existing.find((s) => JSON.parse(s.members).includes(p.id));
+    if (!squad) {
+      squad = {
+        id: randomUUID(),
+        code: randomUUID().slice(0, 6).toUpperCase(),
+        name: p.name + '’s Four Banners',
+        demo: p.demo,
+        members: JSON.stringify([p.id]),
+      };
+      db.prepare('INSERT INTO squads(id,code,name,demo,members) VALUES (?,?,?,?,?)').run(
+        squad.id,
+        squad.code,
+        squad.name,
+        squad.demo,
+        squad.members,
+      );
+    }
+  }
+  r.json({
+    ...squad,
+    members: JSON.parse(squad.members).map((id: string) => ({ id, name: profile(id)?.name })),
+  });
+});
+app.post('/api/gathering/demo', (q, r) => {
+  const p = profile(r.locals.player.id)!;
+  if (!p.demo) {
+    r.status(403).json({ error: 'Simulated gathering is demo-only' });
+    return;
+  }
+  if (p.progress.squadWins < 1) {
+    r.status(403).json({ error: 'Win Banner Conquest first' });
+    return;
+  }
+  const squad = db.prepare('SELECT * FROM squads WHERE id=? AND demo=1').get(q.body.squadId) as any;
+  if (!squad || !JSON.parse(squad.members).includes(p.id)) {
+    r.status(403).json({ error: 'Squad membership required' });
+    return;
+  }
+  const id = randomUUID(),
+    metadata = {
+      id,
+      squadId: squad.id,
+      simulated: true,
+      approvals: [p.id, 'demo-bot-1', 'demo-bot-2', 'demo-bot-3'],
+      at: new Date().toISOString(),
+    };
+  const hash = digest(metadata);
+  db.transaction(() => {
+    db.prepare('INSERT INTO gatherings VALUES (?,?,?,?,?)').run(
+      id,
+      squad.id,
+      JSON.stringify(metadata.approvals),
+      1,
+      hash,
+    );
+    p.progress.stage = 3;
+    saveProfile(p);
+    issueBadge(p.id, 'Proof of Fellowship', id);
+  })();
+  r.json({ hash, simulated: true });
+});
+app.post('/api/demo/reset', (_q, r) => {
+  const p = r.locals.player;
+  if (!p.demo) {
+    r.status(403).json({ error: 'Demo only' });
+    return;
+  }
+  const n = createProfile(p.name, true);
+  r.json({ token: token(n), profile: n });
+});
+app.use((err: Error, _q: express.Request, r: express.Response, _n: express.NextFunction) => {
+  console.error(err.message);
+  r.status(500).json({ error: 'Server operation failed' });
+});
+const http = createServer(app);
+const server = new Server({ transport: new WebSocketTransport({ server: http }) });
+server.define('battle', BattleRoom).filterBy(['mode', 'demo', 'squadId']);
+server.define('conquest', BattleRoom, { mode: 'squad' }).filterBy(['demo']);
+server.define('quest', BattleRoom, { mode: 'quest' }).filterBy(['demo', 'squadId']);
+server.define('squad-lobby', SquadLobby).filterBy(['squadId']);
+if (process.env.ALLOW_CHAIN_BROADCAST === 'true') {
+  const adapter = new BaseAttestation();
+  setInterval(() => {
+    void processOutbox(adapter);
+  }, 15000).unref();
+}
+setInterval(() => {
+  void syncHosted().catch((e) => console.error('Hosted sync:', e.message));
+}, 5000).unref();
+const port = Number(process.env.PORT ?? 2567);
+await server.listen(port);
+console.log(`Aksumara authoritative server :${port}`);

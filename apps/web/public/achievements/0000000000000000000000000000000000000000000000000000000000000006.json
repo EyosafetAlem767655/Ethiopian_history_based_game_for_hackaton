@@ -1,0 +1,12 @@
+{
+  "name": "Ten Victories",
+  "description": "Ethiopian Knights server-validated achievement: Ten Victories",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 6,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}

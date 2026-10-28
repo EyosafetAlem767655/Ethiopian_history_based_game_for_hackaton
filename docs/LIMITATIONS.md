@@ -1,0 +1,15 @@
+# Known limitations
+
+- This is a complete local story vertical slice, not a production tournament service. External Supabase and Base Sepolia integration paths need acceptance testing with actual credentials. No site has been published and no testnet transactions have been broadcast.
+- SQLite remains the single-instance runtime authority. Supabase receives durable result synchronization; it is not a replacement for the local runtime database. Hosted squad/lobby state is currently kept on the backend volume, and full multi-instance recovery is outside this MVP.
+- Local identity is a signed guest session stored in the browser. Clearing browser storage loses access to that guest account. Supabase email links provide authenticated human accounts when configured. Thirdweb embedded wallets are deferred; browser-wallet ownership verification is available.
+- Achievements are off-chain inventory. The ERC-1155 mint/access-control implementation is tested locally, but automated reward minting, hosted metadata and sponsored mint transactions are deferred.
+- All normal duel combat uses sword and shield. Squad roles include spear reach, arrows, protection and a mobility burst. Separate spear/archery duel queues, mounted horse physics, advanced training, Citadel Siege, face customization and mobile controls are deferred.
+- Characters use generated static directional sprites with mirroring, movement bob, independent attack trails, blocking, damage feedback and defeat visibility. These are not full hand-animated directional sprite sheets. The battlefield and much of its ornament are procedural, with explicit collision geometry.
+- Combat physics includes acceleration, separation, wall collision, knockback, stamina and input reconciliation. It does not include rollback hit validation, sophisticated navigation, lag-compensated attacks, or production anti-cheat infrastructure. Continuous high input volume is bounded by room and endpoint rate limits.
+- The local demo gathering uses bots and is explicitly simulated. Genuine verification requires four hosted human identities, qualification, a private consented image and all four approvals. Account approvals do not establish biometric identity or physical co-location.
+- History contains authentic significant gameplay events, not a full deterministic rewind or recorded video. The current frontend provides individual ratings; separate squad, stage-win and crown-champion leaderboard views are deferred.
+- Keyboard/mouse gameplay is desktop-first. Menus adapt to narrow screens, but touch combat is not implemented.
+- Audio consists of original synthesized impact effects and mute control. A licensed music soundtrack and full soundscape are deferred.
+- The test chain uses Ganache's JavaScript WebSocket fallback on Node 22; its optional native µWS warning does not affect the contract assertions.
+- Smart-contract compilation uses pinned OpenZeppelin 5.3.0 and Shanghai EVM output for compatibility with the local chain. The lockfile records the tested dependency set.

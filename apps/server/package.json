@@ -1,0 +1,9 @@
+{
+  "name": "@knights/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node --import tsx src/index.ts"
+  }
+}

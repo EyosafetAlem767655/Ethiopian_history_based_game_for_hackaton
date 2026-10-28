@@ -1,0 +1,7 @@
+node_modules
+.pnpm-store
+data
+.env
+output
+test-results
+apps/web

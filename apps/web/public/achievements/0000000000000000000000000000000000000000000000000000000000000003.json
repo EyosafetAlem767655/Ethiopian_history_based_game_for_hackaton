@@ -1,0 +1,12 @@
+{
+  "name": "Spear Master",
+  "description": "Ethiopian Knights server-validated achievement: Spear Master",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 3,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}

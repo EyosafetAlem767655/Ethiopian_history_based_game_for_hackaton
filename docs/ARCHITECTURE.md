@@ -1,0 +1,17 @@
+# Architecture
+
+The React application owns navigation, identity, persistent records and HUD overlays. Phaser owns battlefield drawing, keyboard/pointer input and movement prediction. Its game bundle is loaded when an arena opens. Cosmetic portraits are independent from server-assigned squad roles.
+
+Colyseus accepts strictly validated input commands. A fixed 1/30-second accumulator advances the shared simulation; snapshots are broadcast every second tick. Each input has a monotonic sequence number. The browser discards acknowledged prediction commands and reapplies outstanding movement inputs to each authoritative snapshot. Remote actors interpolate toward snapshots. The server alone decides collision, damage, deaths, zone ownership, puzzle progress and encounter transitions. Clients cannot submit victory or progression records.
+
+Rooms provide a five-second human matchmaking window, then fill empty seats with server bots. Duels have two seats, conquest eight, quests four. One squad occupies each team in conquest; quest rooms are isolated by squad ID. A disconnected participant becomes a bot during the 30-second reconnection grace period. Training uses a stationary dummy. Bots send input through the same movement and damage rules as people; demo enemies have slower reactions.
+
+SQLite WAL is the local authority and durable queue. One transaction inserts a unique result, participant links, progression, badges and an attestation outbox entry. Completed results contain canonical sorted-key JSON and Keccak-256 hashes. Snapshot positions are never written every tick. Significant events are stored in result metadata; history shows a timeline. This is not deterministic full-match replay.
+
+Supabase is optional: verified Supabase tokens are exchanged for a game session; hosted identities are recorded separately from local guests. The server uses a service-role client for profile operations, private photo storage and `commit_match`, an idempotent SQL transaction. A durable local outbox retries hosted result synchronization. SQLite remains the runtime source and must reside on persistent storage. The SQL schema and adapters are supplied, but hosted acceptance requires an actual Supabase project and credentials.
+
+Wallet binding uses an expiring single-use challenge signed by the wallet owner. Guest IDs are not wallet identities. No custodial player keys are created. Attestation is independent from combat; the optional Base Sepolia worker submits trusted hashes only when explicitly enabled, retries failures and checks existing anchors before resubmission. Demo records always retain simulated status. ERC-1155 issuance is supported and tested in the contract; gameplay inventory currently remains off-chain.
+
+The Royal Gathering requires four hosted human identities, a consented private upload and four account approvals. File signatures, MIME types, size and squad membership are checked. Photos are never hashed into public result payloads or put on-chain; fellowship metadata hashes use pseudonymous member digests. Approved members can delete the image. This is social participation attestation, not biometric or physical-location verification.
+
+Demo accounts, rooms, results, leaderboards and badges are explicitly partitioned. Only the demo endpoint accepts simulated gathering approvals. Normal progression cannot use it. Reset creates a new demo identity and leaves historical authoritative records intact.

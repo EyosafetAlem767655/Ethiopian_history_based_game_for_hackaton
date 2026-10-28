@@ -1,0 +1,12 @@
+{
+  "name": "Thronebreaker",
+  "description": "Ethiopian Knights server-validated achievement: Thronebreaker",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 10,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}

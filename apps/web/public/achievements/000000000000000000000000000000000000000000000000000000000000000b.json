@@ -1,0 +1,12 @@
+{
+  "name": "Crown Champion",
+  "description": "Ethiopian Knights server-validated achievement: Crown Champion",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 11,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "First Blood",
+  "description": "Ethiopian Knights server-validated achievement: First Blood",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 1,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}

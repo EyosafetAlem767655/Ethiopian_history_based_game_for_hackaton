@@ -1,0 +1,12 @@
+{
+  "name": "Four Banners Champion",
+  "description": "Ethiopian Knights server-validated achievement: Four Banners Champion",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 7,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "camera": "top-down three-quarter",
+  "assets": {
+    "aksumara": {
+      "file": "aksumara.png",
+      "width": 1536,
+      "height": 1024,
+      "source": "built-in imagegen"
+    },
+    "portraits": {
+      "file": "portraits.png",
+      "width": 1254,
+      "height": 1254,
+      "source": "built-in imagegen",
+      "columns": 2,
+      "rows": 2,
+      "order": ["lion", "spear", "archer", "rider"]
+    },
+    "warriors": {
+      "file": "warriors.png",
+      "width": 1296,
+      "height": 1213,
+      "source": "built-in imagegen",
+      "columns": 2,
+      "rows": 2,
+      "order": ["lion", "spear", "archer", "rider"]
+    },
+    "bosses": {
+      "file": "bosses.png",
+      "width": 1774,
+      "height": 887,
+      "source": "built-in imagegen",
+      "columns": 2,
+      "rows": 1,
+      "order": ["guardian", "king"]
+    }
+  },
+  "animation": {
+    "states": ["idle", "move", "attack", "block", "dodge", "hurt", "defeat"],
+    "implementation": "static sprites with mirroring, movement bob, independent weapon effects and defeat visibility; procedural fallback",
+    "fullDirectionalSets": false
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "Guardian Slayer",
+  "description": "Ethiopian Knights server-validated achievement: Guardian Slayer",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 9,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}

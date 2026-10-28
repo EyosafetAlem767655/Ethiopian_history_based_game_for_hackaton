@@ -1,0 +1,12 @@
+{
+  "name": "Royal Rider",
+  "description": "Ethiopian Knights server-validated achievement: Royal Rider",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 5,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}

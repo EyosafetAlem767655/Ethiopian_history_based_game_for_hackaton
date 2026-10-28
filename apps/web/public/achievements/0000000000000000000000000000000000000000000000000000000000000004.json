@@ -1,0 +1,12 @@
+{
+  "name": "Eagle Eye",
+  "description": "Ethiopian Knights server-validated achievement: Eagle Eye",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 4,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}

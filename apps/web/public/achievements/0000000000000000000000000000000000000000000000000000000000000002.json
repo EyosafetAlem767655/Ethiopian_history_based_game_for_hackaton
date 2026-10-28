@@ -1,0 +1,12 @@
+{
+  "name": "Sword Master",
+  "description": "Ethiopian Knights server-validated achievement: Sword Master",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 2,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}
