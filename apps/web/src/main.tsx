@@ -2,9 +2,16 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Client, type Room } from 'colyseus.js';
 import QRCode from 'qrcode';
-import { useUI, api, saveSession, API } from './store';
+import { useUI, api, saveSession, API, connection } from './store';
+import { requestJSON } from './services/http';
+import { CampaignScreen } from './CampaignScreen';
+import { ScrollGuide } from './ScrollGuide';
+import { audio } from './audio';
+import { MISSIONS } from '../../../packages/shared/src/missions';
+import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
 import type { Mode, World } from '../../../packages/shared/src/game';
 import './style.css';
+import './expansion.css';
 import { hostedAuth, resumeHosted, signInEmail } from './hostedAuth';
 const heroes = [
   {
@@ -105,7 +112,7 @@ function App() {
     let cancelled = false,
       game: import('phaser').Game | undefined;
     const el = gameEl.current;
-    void import('./game').then(({ mountGame }) => {
+    void import('./iso').then(({ mountGame }) => {
       if (!cancelled) game = mountGame(el, room, session.profile.id);
     });
     return () => {
@@ -125,6 +132,7 @@ function App() {
     }
   }
   async function login(demo: boolean) {
+    audio.unlock();
     await action(async () => {
       const s = await api('/session', { name: name.trim() || 'Wanderer', demo });
       saveSession(s);
@@ -132,6 +140,7 @@ function App() {
     });
   }
   async function start(mode: Mode) {
+    audio.unlock();
     await action(async () => {
       if (!session) return;
       await room?.leave();
@@ -139,15 +148,12 @@ function App() {
       setWaiting(mode === 'tutorial' ? 0 : 5);
       setMessages([]);
       setPaused(false);
-      const endpoint =
-        import.meta.env.VITE_WS_URL ??
-        (API
-          ? API.replace(/^http/, 'ws')
-          : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:2567`);
+      const endpoint = connection().ws;
       const c = new Client(endpoint);
       const match = mode === 'tutorial' ? c.create.bind(c) : c.joinOrCreate.bind(c);
       const r = await match(mode === 'squad' ? 'conquest' : mode === 'quest' ? 'quest' : 'battle', {
         mode,
+        protocol: PROTOCOL_VERSION,
         demo: !!session.profile.demo,
         squadId: mode === 'squad' || mode === 'quest' ? (squad?.id ?? '') : '',
         token: session.token,
@@ -158,9 +164,46 @@ function App() {
       setPage('battle');
     });
   }
+  async function startCampaign(missionId: number) {
+    audio.unlock();
+    await action(async () => {
+      if (!session) return;
+      await room?.leave();
+      let current = squad;
+      if (MISSIONS[missionId - 1].chapter > 1 && !current) {
+        current = await api('/squad', {});
+        setSquad(current);
+        const url = location.origin + '/?pass=' + encodeURIComponent(current.id);
+        setQr(await QRCode.toDataURL(url, { width: 160 }));
+      }
+      useUI.setState({ snapshot: null });
+      setWaiting(2);
+      setPaused(false);
+      const c = new Client(connection().ws);
+      const options = {
+        missionId,
+        protocol: PROTOCOL_VERSION,
+        demo: !!session.profile.demo,
+        token: session.token,
+        hero,
+        squadId: current?.id ?? '',
+      };
+      const r = await (current
+        ? c.joinOrCreate('campaign', options)
+        : c.create('campaign', options));
+      wireRoom(r, c);
+      setRoom(r);
+      setPage('battle');
+    });
+  }
 
   function wireRoom(r: Room, c: Client) {
     r.onMessage('snapshot', (w: World) => {
+      if (w.protocol !== PROTOCOL_VERSION) {
+        useUI.setState({ error: 'Your game version is outdated. Refresh this page.' });
+        void r.leave();
+        return;
+      }
       useUI.setState({ snapshot: w });
       if (w.tick > 0) setWaiting(0);
     });
@@ -211,15 +254,19 @@ function App() {
   }
   const mine = snapshot?.players.find((p) => p.id === session?.profile.id),
     isDemo = !!session?.profile.demo;
+  const finalVictory =
+    snapshot?.winner === mine?.team &&
+    (snapshot?.mode === 'quest' || snapshot?.campaign?.missionId === 15);
   const nav = [
     ['home', '⌂', 'The kingdom'],
     ['journey', '◇', 'Your journey'],
+    ['arena', '⚔', 'Royal arena'],
     ['heroes', '♜', 'Warriors'],
     ['leaderboard', '♛', 'Hall of legends'],
     ['profile', '◈', 'Your legacy'],
   ];
   function navigate(id: string) {
-    if (id === 'leaderboard')
+    if (id === 'leaderboard' && session)
       void action(async () => {
         setLeaders(await api('/leaderboard'));
         setPage(id);
@@ -227,7 +274,7 @@ function App() {
     else setPage(id);
   }
   const tutorialText: Record<string, string> = {
-    movement: 'Move with W A S D. Explore the training grounds.',
+    movement: 'Move with W A S D or the arrow keys. Explore the training grounds.',
     attack: 'Approach the training warrior. Aim and click to land two sword strikes.',
     defend: 'Hold the right mouse button to raise your shield.',
     dodge: 'Press SPACE to dodge. Watch your stamina.',
@@ -248,9 +295,10 @@ function App() {
             <a className="brand" onClick={() => setPage('home')}>
               <span className="brand-mark">♛</span>
               <span>
-                ETHIOPIAN
-                <br />
-                <b>KNIGHTS</b>
+                <b className="amharic-title" lang="am">
+                  ክብረ ጉግስ
+                </b>
+                <span className="brand-latin">KIBRE GUGS</span>
                 <small>THE BATTLE FOR THE THRONE</small>
               </span>
             </a>
@@ -320,6 +368,9 @@ function App() {
                 <div className="eyebrow">
                   <span /> THE ROYAL TRIALS HAVE BEGUN
                 </div>
+                <span className="amharic-hero" lang="am">
+                  ክብረ ጉግስ
+                </span>
                 <h1>
                   A kingdom fallen.
                   <br />A <em>legend</em> rising.
@@ -436,7 +487,7 @@ function App() {
               </div>
             </section>
             <footer>
-              <span>© 2026 ETHIOPIAN KNIGHTS</span>
+              <span>© 2026 ክብረ ጉግስ · KIBRE GUGS</span>
               <span>INSPIRED BY HERITAGE. BUILT FOR LEGENDS.</span>
               <span>
                 HACKATHON PROTOTYPE <i>◆</i>
@@ -468,7 +519,9 @@ function App() {
             <button disabled={busy} className="outline-btn" onClick={() => login(false)}>
               BEGIN NORMAL PROGRESSION
             </button>
-            <small>Demo: 5–8 minutes · Separate records · No real token rewards</small>
+            <small>
+              Demo: approximately 8–12 minutes · Separate records · No real token rewards
+            </small>
           </section>
         )}
         {page === 'heroes' && (
@@ -512,6 +565,14 @@ function App() {
           </section>
         )}
         {page === 'journey' && (
+          <CampaignScreen
+            onMission={startCampaign}
+            onTraining={() => start('tutorial')}
+            onSquad={() => getSquad()}
+            busy={busy}
+          />
+        )}
+        {page === 'arena' && (
           <section className="content-page">
             {!session ? (
               <Gate onPlay={() => setPage('identity')} />
@@ -602,9 +663,9 @@ function App() {
                     <button
                       className="outline-btn"
                       disabled={busy || (progress?.stage ?? 1) < 3}
-                      onClick={() => start('quest')}
+                      onClick={() => setPage('journey')}
                     >
-                      ENTER THE CITADEL →
+                      OPEN THE CAMPAIGN →
                     </button>
                   </article>
                 </div>
@@ -666,9 +727,8 @@ function App() {
                 <span className="eyebrow">THE ROYAL GATHERING</span>
                 <h2>A seat at the royal table.</h2>
                 <p>
-                  Victory is sweeter when shared. Win{' '}
-                  {isDemo ? 'one squad battle' : 'two squad battles and reach 1100 rating'} to
-                  unlock your pass.
+                  Complete Chapter II to unlock your pass. Legacy arena qualification also remains
+                  valid: {isDemo ? 'one squad victory' : 'two squad victories with 1100 rating'}.
                 </p>
                 <small>
                   Prototype Royal Lunch Pass — demonstration only.
@@ -687,8 +747,9 @@ function App() {
                   className="gold-btn"
                   disabled={
                     busy ||
-                    (progress?.squadWins ?? 0) < (isDemo ? 1 : 2) ||
-                    (!isDemo && (progress?.squadRating ?? 0) < 1100)
+                    (!me?.campaign?.completed?.includes(isDemo ? 8 : 10) &&
+                      ((progress?.squadWins ?? 0) < (isDemo ? 1 : 2) ||
+                        (!isDemo && (progress?.squadRating ?? 0) < 1100)))
                   }
                   onClick={() => setPage('gathering')}
                 >
@@ -918,20 +979,26 @@ function App() {
               </button>
               <div>
                 <span className="eyebrow">
-                  {snapshot?.mode === 'quest'
-                    ? 'THE LOST CROWN'
-                    : snapshot?.mode === 'squad'
-                      ? 'THE FOUR BANNERS'
-                      : snapshot?.mode === 'tutorial'
-                        ? 'TRAINING GROUNDS'
-                        : 'THE WARRIOR♜ TRIAL'}
+                  {snapshot?.campaign
+                    ? ['THE WARRIOR’S TRIAL', 'THE FOUR BANNERS', 'THE LOST CROWN'][
+                        MISSIONS[snapshot.campaign.missionId - 1].chapter - 1
+                      ]
+                    : snapshot?.mode === 'quest'
+                      ? 'THE LOST CROWN'
+                      : snapshot?.mode === 'squad'
+                        ? 'THE FOUR BANNERS'
+                        : snapshot?.mode === 'tutorial'
+                          ? 'TRAINING GROUNDS'
+                          : 'THE WARRIOR’S TRIAL'}
                 </span>
                 <h3>
-                  {snapshot?.mode === 'squad'
-                    ? 'Banner Conquest'
-                    : snapshot?.mode === 'quest'
-                      ? 'The citadel of Aksumara'
-                      : 'The sunstone arena'}
+                  {snapshot?.campaign
+                    ? MISSIONS[snapshot.campaign.missionId - 1].name
+                    : snapshot?.mode === 'squad'
+                      ? 'Banner Conquest'
+                      : snapshot?.mode === 'quest'
+                        ? 'The citadel of Aksumara'
+                        : 'The sunstone arena'}
                 </h3>
               </div>
               <div className="timer">
@@ -941,15 +1008,59 @@ function App() {
               </div>
               <span className="demo-tag">{isDemo ? 'STORY DEMO' : 'LIVE ARENA'}</span>
             </div>
-            <div className="objective">
-              <span>◇</span>
-              {snapshot?.mode === 'tutorial'
-                ? tutorialText[snapshot.phase]
-                : snapshot?.mode === 'quest'
-                  ? questText[snapshot.phase]
-                  : snapshot?.mode === 'squad'
-                    ? `Capture and hold the three banners · EMERALD ${Math.floor(snapshot.scores[0])} : ${Math.floor(snapshot.scores[1])} CRIMSON`
-                    : 'Defeat your rival. Aim with the mouse. Every strike matters.'}
+            <ScrollGuide
+              id={
+                snapshot?.campaign
+                  ? `${snapshot.campaign.missionId}-${snapshot.campaign.messageId}`
+                  : `${snapshot?.mode}-${snapshot?.phase}`
+              }
+              chapter={
+                snapshot?.campaign
+                  ? MISSIONS[snapshot.campaign.missionId - 1].name
+                  : 'THE ROYAL CHRONICLER'
+              }
+              message={
+                snapshot?.campaign?.objective ??
+                (snapshot?.mode === 'tutorial'
+                  ? tutorialText[snapshot.phase]
+                  : snapshot?.mode === 'quest'
+                    ? questText[snapshot.phase]
+                    : snapshot?.mode === 'squad'
+                      ? `Capture and hold the three banners · EMERALD ${Math.floor(snapshot.scores[0])} : ${Math.floor(snapshot.scores[1])} CRIMSON`
+                      : 'Defeat your rival. Aim with the mouse. Every strike matters.')
+              }
+            />
+            <div className="arena-toolbar">
+              <span>WASD / ARROWS · WHEEL TO ZOOM · F FULLSCREEN</span>
+              <button
+                onClick={() => {
+                  const el = document.querySelector('.battle-layout');
+                  if (document.fullscreenElement) void document.exitFullscreen();
+                  else void el?.requestFullscreen();
+                }}
+              >
+                ⛶ FULLSCREEN
+              </button>
+              <label>
+                VOLUME{' '}
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step=".05"
+                  aria-label="Sound volume"
+                  value={useUI.getState().volume}
+                  onChange={(e) => useUI.setState({ volume: Number(e.target.value) })}
+                />
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={useUI.getState().reducedMotion}
+                  onChange={(e) => useUI.setState({ reducedMotion: e.target.checked })}
+                />{' '}
+                REDUCED MOTION
+              </label>
             </div>
             <div className="game-wrap">
               <div ref={gameEl} className="phaser-host" />
@@ -957,7 +1068,11 @@ function App() {
                 <div className="waiting">
                   <span className="crest">⚔</span>
                   <h2>Assembling the arena…</h2>
-                  <p>Searching for a rival · AI joins after five seconds</p>
+                  <p>
+                    {snapshot?.campaign
+                      ? 'Preparing your expedition and AI companions.'
+                      : 'Searching for a rival · AI joins after five seconds'}
+                  </p>
                   <span>{waiting}s</span>
                 </div>
               )}
@@ -1005,9 +1120,7 @@ function App() {
                   <div className="result-card">
                     <span className="crest">{snapshot.winner === mine?.team ? '♛' : '⚔'}</span>
                     <span className="eyebrow">
-                      {snapshot.mode === 'quest'
-                        ? 'THE ENCHANTMENT IS BROKEN'
-                        : 'THE ARENA HAS SPOKEN'}
+                      {finalVictory ? 'THE ENCHANTMENT IS BROKEN' : 'THE ARENA HAS SPOKEN'}
                     </span>
                     <h1>
                       {snapshot.mode === 'tutorial'
@@ -1017,13 +1130,13 @@ function App() {
                           : 'Rise. Fight again.'}
                     </h1>
                     <p>
-                      {snapshot.mode === 'quest'
+                      {finalVictory
                         ? 'Aksumara is free. Every warrior has earned their place in its story.'
                         : snapshot.mode === 'tutorial'
                           ? 'Your training is complete. The Royal Trials await.'
                           : 'An authoritative result has been recorded. Your journey continues.'}
                     </p>
-                    {snapshot.mode === 'quest' && (
+                    {finalVictory && (
                       <span className="eyebrow">
                         CROWN CHAMPION ·{' '}
                         {snapshot.players.find((p) => p.id === snapshot.champion)?.name ??
@@ -1057,8 +1170,10 @@ function App() {
                     {session?.profile.name} <small>· {mine?.role.toUpperCase()}</small>
                   </strong>
                   <div className="meter health">
-                    <i style={{ width: (mine?.hp ?? 100) + '%' }} />
-                    <span>{Math.ceil(mine?.hp ?? 100)} / 100 HP</span>
+                    <i style={{ width: (100 * (mine?.hp ?? 100)) / (mine?.maxHp ?? 100) + '%' }} />
+                    <span>
+                      {Math.ceil(mine?.hp ?? 100)} / {mine?.maxHp ?? 100} HP
+                    </span>
                   </div>
                   <div className="meter stamina">
                     <i style={{ width: (mine?.stamina ?? 100) + '%' }} />
@@ -1066,7 +1181,7 @@ function App() {
                 </div>
               </div>
               <div className="control">
-                <kbd>W A S D</kbd>
+                <kbd>WASD / ↑←↓→</kbd>
                 <span>MOVE</span>
               </div>
               <div className="control">
@@ -1156,11 +1271,7 @@ function SquadChat({ squad, onStart }: { squad: any; onStart: () => Promise<void
       else pending = true;
     };
     window.addEventListener('knights-ready', ready);
-    const endpoint =
-      import.meta.env.VITE_WS_URL ??
-      (API
-        ? API.replace(/^http/, 'ws')
-        : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:2567`);
+    const endpoint = connection().ws;
     void new Client(endpoint)
       .joinOrCreate('squad-lobby', { squadId: squad.id, token: session!.token })
       .then((r) => {
@@ -1278,7 +1389,11 @@ function GatheringPanel({ squad, onVerified }: { squad: any; onVerified: () => P
   const leader = squad?.members[0]?.id === session?.profile.id;
   async function refresh() {
     const current = await api('/gathering-squad/' + squad.id);
-    if (current.id) setRecord(await api('/gathering/' + current.id));
+    if (current.id) {
+      const latest = await api('/gathering/' + current.id);
+      setRecord(latest);
+      if (latest.verified) await onVerified();
+    }
   }
   async function run(fn: () => Promise<void>) {
     setLoading(true);
@@ -1377,17 +1492,19 @@ function GatheringPanel({ squad, onVerified }: { squad: any; onVerified: () => P
                   className="outline-btn"
                   onClick={() =>
                     run(async () => {
-                      const response = await fetch(API + '/api/gathering/' + record.id + '/photo', {
-                        method: 'POST',
-                        headers: {
-                          Authorization: 'Bearer ' + session!.token,
-                          'Content-Type': file.type,
-                          'X-Photo-Consent': 'true',
+                      await requestJSON(
+                        API + '/api/gathering/' + record.id + '/photo',
+                        {
+                          method: 'POST',
+                          headers: {
+                            Authorization: 'Bearer ' + session!.token,
+                            'Content-Type': file.type,
+                            'X-Photo-Consent': 'true',
+                          },
+                          body: file,
                         },
-                        body: file,
-                      });
-                      const out = await response.json();
-                      if (!response.ok) throw Error(out.error);
+                        45000,
+                      );
                       setFile(null);
                       setPreview('');
                       await refresh();
@@ -1428,11 +1545,10 @@ function GatheringPanel({ squad, onVerified }: { squad: any; onVerified: () => P
               className="outline-btn"
               onClick={() =>
                 run(async () => {
-                  const response = await fetch(API + '/api/gathering/' + record.id + '/photo', {
+                  await requestJSON(API + '/api/gathering/' + record.id + '/photo', {
                     method: 'DELETE',
                     headers: { Authorization: 'Bearer ' + session!.token },
                   });
-                  if (!response.ok) throw Error('Photo deletion failed');
                   await refresh();
                 })
               }

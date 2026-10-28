@@ -11,6 +11,10 @@ import { registerHostedRoutes, exchangeHosted, isHosted, syncHosted } from './ho
 import { BaseAttestation, processOutbox } from './attestation';
 import { BattleRoom } from './room';
 import { SquadLobby } from './lobby';
+import { leaderboard } from './leaderboard';
+import { CampaignRoom } from './campaign-room';
+import { MISSIONS, DEMO_MISSIONS } from '../../../packages/shared/src/missions';
+import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
 import {
   authenticate,
   createProfile,
@@ -22,9 +26,20 @@ import {
   digest,
   saveProfile,
   issueBadge,
+  campaignProgress,
+  saveCampaign,
 } from './store';
 const app = express();
-app.use(cors({ origin: (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(',') }));
+app.use((_q, r, next) => {
+  r.setHeader('X-Request-ID', randomUUID());
+  next();
+});
+app.use(
+  cors({
+    origin: (process.env.CORS_ORIGINS ?? 'http://localhost:5173').split(',').map((s) => s.trim()),
+    exposedHeaders: ['X-Request-ID'],
+  }),
+);
 app.use(express.json({ limit: '32kb' }));
 const limits = new Map<string, { n: number; time: number }>();
 app.use((req, res, next) => {
@@ -49,7 +64,9 @@ app.get('/api/health', (_q, r) =>
     ok: true,
     identity: 'local-guest',
     persistence: 'sqlite',
-    blockchain: 'simulated',
+    blockchain:
+      process.env.ALLOW_CHAIN_BROADCAST === 'true' ? 'base-sepolia-configured' : 'simulated',
+    protocol: PROTOCOL_VERSION,
     tickRate: 30,
   }),
 );
@@ -105,6 +122,7 @@ app.get('/api/me', (_q, r) => {
     wallet: wallet
       ? { status: 'verified', address: wallet.address }
       : { status: 'pending', label: 'Wallet not connected' },
+    campaign: campaignProgress(p.id),
   });
 });
 app.post('/api/wallet/nonce', (_q, r) => {
@@ -149,6 +167,10 @@ app.post('/api/wallet/bind', async (q, r) => {
   }
 });
 registerHostedRoutes(app);
+app.get('/api/campaign', (_q, r) => {
+  const p = r.locals.player;
+  r.json({ progress: campaignProgress(p.id), missions: MISSIONS, demoOrder: DEMO_MISSIONS });
+});
 app.get('/api/pass/:id', (q, r) => {
   const s = db
     .prepare('SELECT * FROM squads WHERE id=? AND demo=?')
@@ -167,12 +189,7 @@ app.get('/api/pass/:id', (q, r) => {
   });
 });
 app.get('/api/leaderboard', (_q, r) => {
-  const rows = db
-    .prepare(
-      "SELECT id,name,progress FROM profiles WHERE demo=? ORDER BY json_extract(progress,'rating') DESC LIMIT 30",
-    )
-    .all(r.locals.player.demo);
-  r.json(rows.map((p: any) => ({ ...p, progress: JSON.parse(p.progress) })));
+  r.json(leaderboard(r.locals.player.demo));
 });
 app.post('/api/squad', (q, r) => {
   const p = r.locals.player;
@@ -235,7 +252,7 @@ app.post('/api/gathering/demo', (q, r) => {
     r.status(403).json({ error: 'Simulated gathering is demo-only' });
     return;
   }
-  if (p.progress.squadWins < 1) {
+  if (p.progress.squadWins < 1 && !campaignProgress(p.id).completed.includes(8)) {
     r.status(403).json({ error: 'Win Banner Conquest first' });
     return;
   }
@@ -263,6 +280,9 @@ app.post('/api/gathering/demo', (q, r) => {
     );
     p.progress.stage = 3;
     saveProfile(p);
+    const campaign = campaignProgress(p.id);
+    campaign.fellowship = true;
+    saveCampaign(p.id, campaign);
     issueBadge(p.id, 'Proof of Fellowship', id);
   })();
   r.json({ hash, simulated: true });
@@ -277,8 +297,12 @@ app.post('/api/demo/reset', (_q, r) => {
   r.json({ token: token(n), profile: n });
 });
 app.use((err: Error, _q: express.Request, r: express.Response, _n: express.NextFunction) => {
-  console.error(err.message);
-  r.status(500).json({ error: 'Server operation failed' });
+  console.error('Request', r.getHeader('X-Request-ID'), err.message);
+  r.status(500).json({
+    error: 'Server operation failed. Please retry or quote the request ID.',
+    code: 'SERVER_ERROR',
+    requestId: r.getHeader('X-Request-ID'),
+  });
 });
 const http = createServer(app);
 const server = new Server({ transport: new WebSocketTransport({ server: http }) });
@@ -286,6 +310,7 @@ server.define('battle', BattleRoom).filterBy(['mode', 'demo', 'squadId']);
 server.define('conquest', BattleRoom, { mode: 'squad' }).filterBy(['demo']);
 server.define('quest', BattleRoom, { mode: 'quest' }).filterBy(['demo', 'squadId']);
 server.define('squad-lobby', SquadLobby).filterBy(['squadId']);
+server.define('campaign', CampaignRoom).filterBy(['demo', 'missionId', 'squadId', 'protocol']);
 if (process.env.ALLOW_CHAIN_BROADCAST === 'true') {
   const adapter = new BaseAttestation();
   setInterval(() => {

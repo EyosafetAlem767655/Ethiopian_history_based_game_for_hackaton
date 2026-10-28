@@ -7,16 +7,19 @@ import {
   type World,
   type Fighter,
 } from '../packages/shared/src/game';
-function blocked(x: number, y: number) {
+import type { Geometry } from '../packages/shared/src/presentation';
+function blocked(x: number, y: number, geometry?: Geometry) {
   return (
     x < 90 ||
-    x > 1110 ||
+    x > (geometry?.width ?? 1200) - 90 ||
     y < 110 ||
-    y > 660 ||
-    obstacles.some((o) => x > o.x - 30 && x < o.x + o.w + 30 && y > o.y - 30 && y < o.y + o.h + 30)
+    y > (geometry?.height ?? 760) - 100 ||
+    (geometry?.obstacles ?? obstacles).some(
+      (o) => x > o.x - 30 && x < o.x + o.w + 30 && y > o.y - 30 && y < o.y + o.h + 30,
+    )
   );
 }
-export function direction(p: Fighter, tx: number, ty: number) {
+export function direction(p: Fighter, tx: number, ty: number, geometry?: Geometry) {
   const size = 40,
     start = [Math.round(p.x / size), Math.round(p.y / size)],
     end = [Math.round(tx / size), Math.round(ty / size)],
@@ -37,7 +40,7 @@ export function direction(p: Fighter, tx: number, ty: number) {
       [0, -1],
     ]) {
       const b = [a[0] + d[0], a[1] + d[1]];
-      if (!prev.has(key(b)) && !blocked(b[0] * size, b[1] * size)) {
+      if (!prev.has(key(b)) && !blocked(b[0] * size, b[1] * size, geometry)) {
         prev.set(key(b), a);
         queue.push(b);
       }
@@ -47,7 +50,7 @@ export function direction(p: Fighter, tx: number, ty: number) {
     let next = found;
     while (prev.get(key(next)) && key(prev.get(key(next))!) !== key(start))
       next = prev.get(key(next))!;
-    if (Math.hypot(tx - p.x, ty - p.y) > 65) {
+    if (Math.hypot(tx - p.x, ty - p.y) > 90) {
       tx = next[0] * size;
       ty = next[1] * size;
     }

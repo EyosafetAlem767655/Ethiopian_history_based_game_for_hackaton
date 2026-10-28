@@ -1,5 +1,9 @@
 # Architecture
 
+The expansion uses room protocol 2 and a separate `CampaignRoom`. Shared `missions.ts` defines the fifteen authored trials and versioned eligibility; `campaign.ts` owns objective interactions, seeded puzzles, mounts, monsters, honor and mission outcomes. `presentation.ts` defines projection and inverse projection used by input and rendering. The active Phaser renderer is `iso.ts`; the previous flat renderer remains in the repository as reference. The camera follows the local predicted actor and reprojects cursor aim through its current zoom/scroll.
+
+Campaign rooms fill companions after two seconds; rated legacy rooms retain their five-second matchmaking window. Campaign checkpoints are separate from competitive statistics. SQLite's additive `campaign_progress` table is mirrored through the optional Supabase `commit_campaign` transaction. The additive PostgreSQL migration is 002; existing installations must not rerun 001. See [campaign details](CAMPAIGN.md) and [deployment steps](DEPLOYMENT.md).
+
 The React application owns navigation, identity, persistent records and HUD overlays. Phaser owns battlefield drawing, keyboard/pointer input and movement prediction. Its game bundle is loaded when an arena opens. Cosmetic portraits are independent from server-assigned squad roles.
 
 Colyseus accepts strictly validated input commands. A fixed 1/30-second accumulator advances the shared simulation; snapshots are broadcast every second tick. Each input has a monotonic sequence number. The browser discards acknowledged prediction commands and reapplies outstanding movement inputs to each authoritative snapshot. Remote actors interpolate toward snapshots. The server alone decides collision, damage, deaths, zone ownership, puzzle progress and encounter transitions. Clients cannot submit victory or progression records.

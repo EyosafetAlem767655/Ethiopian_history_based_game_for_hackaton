@@ -1,5 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
-import { db, profile, saveProfile, token, digest, issueBadge, type Profile } from './store';
+import {
+  db,
+  profile,
+  saveProfile,
+  token,
+  digest,
+  issueBadge,
+  campaignProgress,
+  saveCampaign,
+  type Profile,
+} from './store';
 import { freshProgress } from '../../../packages/shared/src/game';
 import { randomUUID } from 'node:crypto';
 import type { Express } from 'express';
@@ -39,6 +49,12 @@ export async function exchangeHosted(accessToken: string, name: string) {
       JSON.stringify(remote.data?.progress ?? freshProgress()),
     );
     p = profile(id)!;
+    const campaign = await supabase
+      .from('campaign_progress')
+      .select('data')
+      .eq('player_id', id)
+      .maybeSingle();
+    if (campaign.data?.data) saveCampaign(id, campaign.data.data);
   }
   db.prepare('INSERT OR IGNORE INTO hosted_identities VALUES (?)').run(id);
   const up = await supabase.from('profiles').upsert({ id, nickname: p.name, hero: p.hero });
@@ -66,14 +82,25 @@ export async function syncHosted() {
         badges = (
           db.prepare('SELECT * FROM badges WHERE match_id=?').all(row.id) as { player_id: string }[]
         ).filter((b) => isHosted(b.player_id));
-      const { error } = await supabase.rpc('commit_match', {
-        p_id: row.id,
-        p_payload: payload,
-        p_hash: row.hash,
-        p_players: players,
-        p_badges: badges,
-        p_status: row.chain_status,
-      });
+      const { error } = await supabase.rpc(
+        payload.mode === 'campaign' ? 'commit_campaign' : 'commit_match',
+        {
+          p_id: row.id,
+          p_payload: payload,
+          p_hash: row.hash,
+          p_players: players,
+          p_badges: badges,
+          p_status: row.chain_status,
+          ...(payload.mode === 'campaign'
+            ? {
+                p_campaign: players.map((p: any) => ({
+                  player_id: p.id,
+                  data: campaignProgress(p.id),
+                })),
+              }
+            : {}),
+        },
+      );
       if (error) {
         db.prepare('UPDATE hosted_outbox SET error=? WHERE match_id=?').run(error.message, row.id);
       } else
@@ -112,7 +139,10 @@ export function registerHostedRoutes(app: Express) {
       if (
         members.some((id) => {
           const pr = profile(id)!.progress;
-          return pr.squadWins < 2 || pr.squadRating < 1100;
+          return (
+            !campaignProgress(id).completed.includes(10) &&
+            (pr.squadWins < 2 || pr.squadRating < 1100)
+          );
         })
       )
         throw Error('Squad qualification not met');
@@ -204,6 +234,9 @@ export function registerHostedRoutes(app: Express) {
             const p = profile(id)!;
             p.progress.stage = 3;
             saveProfile(p);
+            const campaign = campaignProgress(id);
+            campaign.fellowship = true;
+            saveCampaign(id, campaign);
             issueBadge(id, 'Proof of Fellowship', s.id);
           }
         }
@@ -228,6 +261,9 @@ export function registerHostedRoutes(app: Express) {
         await supabase
           .from('player_progression')
           .upsert(members.map((id) => ({ player_id: id, progress: profile(id)!.progress })));
+        await supabase
+          .from('campaign_progress')
+          .upsert(members.map((id) => ({ player_id: id, data: campaignProgress(id) })));
       }
       r.json({ approvals, verified, hash });
     } catch (e) {

@@ -1,5 +1,5 @@
 {
   "buildCommand": "pnpm build",
   "outputDirectory": "apps/web/dist",
-  "rewrites": [{ "source": "/((?!assets/).*)", "destination": "/index.html" }]
+  "rewrites": [{ "source": "/((?!api(?:/|$)|assets/|fonts/|icons/|achievements/).*)", "destination": "/index.html" }]
 }

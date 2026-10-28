@@ -1,4 +1,11 @@
 import Database from 'better-sqlite3';
+import { dirname } from 'node:path';
+import {
+  freshCampaign,
+  completeMission,
+  missionEligibility,
+  type CampaignProgress,
+} from '../../../packages/shared/src/missions';
 import { mkdirSync } from 'node:fs';
 import { randomUUID, createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
 import { keccak256, stringToHex } from 'viem';
@@ -9,6 +16,8 @@ import {
   type World,
 } from '../../../packages/shared/src/game';
 mkdirSync('data', { recursive: true });
+if (process.env.DB_PATH && process.env.DB_PATH !== ':memory:')
+  mkdirSync(dirname(process.env.DB_PATH), { recursive: true });
 export const db = new Database(process.env.DB_PATH ?? 'data/knights.sqlite');
 db.pragma('journal_mode = WAL');
 db.exec(`CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -19,6 +28,36 @@ CREATE TABLE IF NOT EXISTS badges (player_id TEXT NOT NULL,badge TEXT NOT NULL,m
 CREATE TABLE IF NOT EXISTS outbox (match_id TEXT PRIMARY KEY,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,tx TEXT,error TEXT);
 CREATE TABLE IF NOT EXISTS squads (id TEXT PRIMARY KEY,code TEXT UNIQUE NOT NULL,name TEXT NOT NULL,demo INTEGER NOT NULL,members TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS gatherings (id TEXT PRIMARY KEY,squad_id TEXT NOT NULL,approvals TEXT NOT NULL,simulated INTEGER NOT NULL,hash TEXT NOT NULL);`);
+db.exec(
+  'CREATE TABLE IF NOT EXISTS campaign_progress(player_id TEXT PRIMARY KEY,data TEXT NOT NULL);',
+);
+export function campaignProgress(id: string): CampaignProgress {
+  const row = db.prepare('SELECT data FROM campaign_progress WHERE player_id=?').get(id) as
+    | { data: string }
+    | undefined;
+  let value;
+  try {
+    value = row ? JSON.parse(row.data) : freshCampaign();
+  } catch {
+    value = freshCampaign();
+  }
+  if (!value || typeof value !== 'object') value = freshCampaign();
+  return {
+    ...freshCampaign(),
+    ...value,
+    completed: Array.isArray(value.completed)
+      ? value.completed.filter(
+          (n: unknown) => Number.isInteger(n) && Number(n) >= 1 && Number(n) <= 15,
+        )
+      : [],
+    fellowship: !!value.fellowship || (profile(id)?.progress.stage ?? 0) >= 3,
+  };
+}
+export function saveCampaign(id: string, p: CampaignProgress) {
+  db.prepare(
+    'INSERT INTO campaign_progress VALUES (?,?) ON CONFLICT(player_id) DO UPDATE SET data=excluded.data',
+  ).run(id, JSON.stringify(p));
+}
 const squadColumns = db.prepare('PRAGMA table_info(squads)').all() as { name: string }[];
 if (!squadColumns.some((c) => c.name === 'rating'))
   db.exec(
@@ -43,7 +82,14 @@ export function profile(id: string): Profile | undefined {
   const r = db.prepare('SELECT * FROM profiles WHERE id=?').get(id) as
     | (Omit<Profile, 'progress'> & { progress: string })
     | undefined;
-  return r ? { ...r, progress: JSON.parse(r.progress) } : undefined;
+  if (!r) return undefined;
+  let saved;
+  try {
+    saved = JSON.parse(r.progress);
+  } catch {
+    saved = {};
+  }
+  return { ...r, progress: { ...freshProgress(), ...saved } };
 }
 export function saveProfile(p: Profile) {
   db.prepare('UPDATE profiles SET hero=?,progress=? WHERE id=?').run(
@@ -107,10 +153,24 @@ export function recordResult(id: string, w: World, started: string) {
   return db.transaction(() => {
     if (db.prepare('SELECT id FROM results WHERE id=?').get(id)) return false;
     const payload = {
-      version: 1,
+      version: w.campaign ? 2 : 1,
+      ...(w.campaign
+        ? {
+            missionId: w.campaign.missionId,
+            campaignVersion: w.campaign.version,
+            objectives: w.campaign.markers,
+            honor: w.campaign.honor,
+          }
+        : {}),
       matchId: id,
       mode: w.mode,
-      stage: w.mode === 'quest' ? 3 : w.mode === 'squad' ? 2 : 1,
+      stage: w.campaign
+        ? Math.ceil(w.campaign.missionId / 5)
+        : w.mode === 'quest'
+          ? 3
+          : w.mode === 'squad'
+            ? 2
+            : 1,
       demo: w.demo,
       participants: w.players.map((p) => ({
         id: p.id,
@@ -119,6 +179,7 @@ export function recordResult(id: string, w: World, started: string) {
         damage: p.damage,
         kills: p.kills,
         contribution: p.contribution,
+        ...(w.campaign ? { honor: p.honor ?? 0 } : {}),
       })),
       winner: w.winner,
       scoreline: w.scores,
@@ -144,12 +205,41 @@ export function recordResult(id: string, w: World, started: string) {
     for (const f of w.players.filter((p) => profile(p.id))) {
       const p = profile(f.id);
       if (!p) continue;
-      p.progress = progressResult(p.progress, f.team === w.winner, w.mode, w.demo, f.contribution);
+      if (w.campaign) {
+        if (
+          f.team === w.winner &&
+          !missionEligibility(campaignProgress(p.id), w.campaign.missionId, w.demo)
+        ) {
+          const old = campaignProgress(p.id),
+            first = !old.completed.includes(w.campaign.missionId);
+          saveCampaign(
+            p.id,
+            completeMission(old, w.campaign.missionId, f.honor ?? 0, f.contribution),
+          );
+          p.progress.xp += first ? 100 : 20;
+          p.progress.points += first ? 100 : 0;
+          if (w.campaign.missionId === 5) p.progress.stage = Math.max(2, p.progress.stage);
+        }
+      } else
+        p.progress = progressResult(
+          p.progress,
+          f.team === w.winner,
+          w.mode,
+          w.demo,
+          f.contribution,
+        );
       saveProfile(p);
       db.prepare('INSERT INTO participants VALUES (?,?)').run(id, p.id);
       if (w.mode === 'tutorial') continue;
       if (f.team === w.winner) {
         issueBadge(p.id, 'First Blood', id);
+        if (w.campaign?.missionId === 2) issueBadge(p.id, 'Royal Rider', id);
+        if (w.campaign?.missionId === 6) issueBadge(p.id, 'Four Banners Champion', id);
+        if (w.campaign?.missionId === 14) issueBadge(p.id, 'Guardian Slayer', id);
+        if (w.campaign?.missionId === 15) {
+          issueBadge(p.id, 'Thronebreaker', id);
+          if (w.champion === p.id) issueBadge(p.id, 'Crown Champion', id);
+        }
         if (w.mode === 'duel' && p.progress.wins >= 3) issueBadge(p.id, 'Sword Master', id);
         if (w.mode === 'squad' && f.damage >= 50) {
           if (f.role === 'spear') issueBadge(p.id, 'Spear Master', id);

@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "camera": "top-down three-quarter",
+  "version": 2,
+  "camera": "world-coordinate isometric projection (x-y)*0.86, (x+y)*0.43; upright depth-sorted actors",
   "assets": {
     "aksumara": {
       "file": "aksumara.png",
@@ -15,7 +15,12 @@
       "source": "built-in imagegen",
       "columns": 2,
       "rows": 2,
-      "order": ["lion", "spear", "archer", "rider"]
+      "order": [
+        "lion",
+        "spear",
+        "archer",
+        "rider"
+      ]
     },
     "warriors": {
       "file": "warriors.png",
@@ -24,7 +29,12 @@
       "source": "built-in imagegen",
       "columns": 2,
       "rows": 2,
-      "order": ["lion", "spear", "archer", "rider"]
+      "order": [
+        "lion",
+        "spear",
+        "archer",
+        "rider"
+      ]
     },
     "bosses": {
       "file": "bosses.png",
@@ -33,11 +43,324 @@
       "source": "built-in imagegen",
       "columns": 2,
       "rows": 1,
-      "order": ["guardian", "king"]
+      "order": [
+        "guardian",
+        "king"
+      ],
+      "frameBounds": [
+        {
+          "x": 83,
+          "y": 14,
+          "width": 804,
+          "height": 838
+        },
+        {
+          "x": 887,
+          "y": 10,
+          "width": 838,
+          "height": 850
+        }
+      ]
+    },
+    "rig": {
+      "file": "rig.png",
+      "width": 1295,
+      "height": 1214,
+      "columns": 4,
+      "rows": 4,
+      "source": "built-in imagegen",
+      "alpha": true,
+      "order": [
+        "helmet",
+        "torso",
+        "upperArm",
+        "forearm",
+        "thigh",
+        "shin",
+        "boot",
+        "shield",
+        "sword",
+        "spear",
+        "horseBody",
+        "horseHead",
+        "horseNeck",
+        "horseUpperLeg",
+        "horseLowerHoof",
+        "horseTail"
+      ],
+      "pivots": {
+        "jointedLimbs": [
+          0.5,
+          0.12
+        ],
+        "boot": [
+          0.5,
+          0.5
+        ],
+        "weapon": [
+          0.5,
+          0.88
+        ],
+        "horseBody": [
+          0.5,
+          0.5
+        ],
+        "head": [
+          0.5,
+          0.5
+        ]
+      },
+      "animations": {
+        "stride": "opposed thigh sine and independent shin and boot positions",
+        "attack": "shoulder, elbow and weapon articulation with projected light arc",
+        "block": "raised shield",
+        "dodge": "invulnerability fade and movement burst",
+        "hurt": "stun rotation and impact sparks",
+        "defeat": "fallen pose and desaturation",
+        "mounted": "four phase-offset upper and lower horse legs with separate rider arms and torso"
+      },
+      "frameBounds": [
+        {
+          "x": 51,
+          "y": 9,
+          "width": 236,
+          "height": 294
+        },
+        {
+          "x": 408,
+          "y": 15,
+          "width": 240,
+          "height": 289
+        },
+        {
+          "x": 648,
+          "y": 22,
+          "width": 279,
+          "height": 269
+        },
+        {
+          "x": 1040,
+          "y": 25,
+          "width": 186,
+          "height": 279
+        },
+        {
+          "x": 106,
+          "y": 321,
+          "width": 172,
+          "height": 286
+        },
+        {
+          "x": 413,
+          "y": 304,
+          "width": 192,
+          "height": 303
+        },
+        {
+          "x": 747,
+          "y": 356,
+          "width": 174,
+          "height": 227
+        },
+        {
+          "x": 1010,
+          "y": 304,
+          "width": 255,
+          "height": 293
+        },
+        {
+          "x": 97,
+          "y": 607,
+          "width": 185,
+          "height": 303
+        },
+        {
+          "x": 399,
+          "y": 607,
+          "width": 249,
+          "height": 303
+        },
+        {
+          "x": 648,
+          "y": 614,
+          "width": 319,
+          "height": 275
+        },
+        {
+          "x": 991,
+          "y": 611,
+          "width": 278,
+          "height": 299
+        },
+        {
+          "x": 60,
+          "y": 910,
+          "width": 257,
+          "height": 286
+        },
+        {
+          "x": 437,
+          "y": 910,
+          "width": 182,
+          "height": 281
+        },
+        {
+          "x": 733,
+          "y": 910,
+          "width": 166,
+          "height": 279
+        },
+        {
+          "x": 982,
+          "y": 910,
+          "width": 257,
+          "height": 294
+        }
+      ]
+    },
+    "scenery": {
+      "file": "scenery.png",
+      "width": 1254,
+      "height": 1254,
+      "columns": 2,
+      "rows": 2,
+      "source": "built-in imagegen",
+      "alpha": true,
+      "order": [
+        "obelisk",
+        "acacia",
+        "citadelGate",
+        "brazier"
+      ],
+      "frameBounds": [
+        {
+          "x": 158,
+          "y": 8,
+          "width": 469,
+          "height": 619
+        },
+        {
+          "x": 627,
+          "y": 60,
+          "width": 620,
+          "height": 567
+        },
+        {
+          "x": 38,
+          "y": 627,
+          "width": 589,
+          "height": 599
+        },
+        {
+          "x": 627,
+          "y": 627,
+          "width": 554,
+          "height": 593
+        }
+      ]
+    },
+    "monsters": {
+      "file": "monsters.png",
+      "width": 1333,
+      "height": 1180,
+      "columns": 2,
+      "rows": 2,
+      "source": "built-in imagegen",
+      "alpha": true,
+      "order": [
+        "hyena",
+        "shadowCaster",
+        "stoneWarden",
+        "lion"
+      ],
+      "frameBounds": [
+        {
+          "x": 58,
+          "y": 12,
+          "width": 564,
+          "height": 578
+        },
+        {
+          "x": 717,
+          "y": 8,
+          "width": 599,
+          "height": 582
+        },
+        {
+          "x": 16,
+          "y": 590,
+          "width": 650,
+          "height": 577
+        },
+        {
+          "x": 666,
+          "y": 590,
+          "width": 609,
+          "height": 574
+        }
+      ]
+    },
+    "heads": {
+      "file": "heads.png",
+      "width": 1536,
+      "height": 1024,
+      "columns": 2,
+      "rows": 2,
+      "source": "built-in imagegen",
+      "alpha": true,
+      "order": [
+        "lionGuard",
+        "highlandSpear",
+        "riftValleyArcher",
+        "royalRider"
+      ],
+      "frameBounds": [
+        {
+          "x": 316,
+          "y": 12,
+          "width": 259,
+          "height": 469
+        },
+        {
+          "x": 933,
+          "y": 85,
+          "width": 309,
+          "height": 427
+        },
+        {
+          "x": 317,
+          "y": 557,
+          "width": 275,
+          "height": 414
+        },
+        {
+          "x": 930,
+          "y": 512,
+          "width": 317,
+          "height": 477
+        }
+      ]
+    },
+    "scroll": {
+      "file": "scroll.png",
+      "width": 1536,
+      "height": 1024,
+      "columns": 1,
+      "rows": 1,
+      "source": "built-in imagegen",
+      "alpha": true
     }
   },
   "animation": {
-    "states": ["idle", "move", "attack", "block", "dodge", "hurt", "defeat"],
+    "states": [
+      "idle",
+      "move",
+      "attack",
+      "block",
+      "dodge",
+      "hurt",
+      "defeat"
+    ],
     "implementation": "static sprites with mirroring, movement bob, independent weapon effects and defeat visibility; procedural fallback",
     "fullDirectionalSets": false
   }

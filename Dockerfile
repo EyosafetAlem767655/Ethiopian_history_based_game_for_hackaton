@@ -7,6 +7,7 @@ COPY packages/shared/package.json ./packages/shared/package.json
 RUN pnpm install --frozen-lockfile
 COPY apps/server apps/server
 COPY packages/shared packages/shared
+COPY scripts/backup.ts scripts/backup.ts
 COPY tsconfig.json ./
 ENV NODE_ENV=production
 EXPOSE 2567

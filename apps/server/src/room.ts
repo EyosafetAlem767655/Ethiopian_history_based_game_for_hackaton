@@ -12,6 +12,7 @@ import {
 } from '../../../packages/shared/src/game';
 import { authenticate, recordResult, saveProfile, db, type Profile } from './store';
 import { z } from 'zod';
+import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
 export class BattleRoom extends Room {
   maxClients = 8;
   maxMessagesPerSecond = 80;
@@ -60,7 +61,12 @@ export class BattleRoom extends Room {
       }
     }, 1000 / 30);
   }
-  onAuth(_c: Client, o: { token: string; demo: boolean; mode: Mode; squadId?: string }) {
+  onAuth(
+    _c: Client,
+    o: { token: string; demo: boolean; mode: Mode; squadId?: string; protocol?: number },
+  ) {
+    if (o.protocol !== PROTOCOL_VERSION)
+      throw Error('Your game version is outdated. Refresh this page.');
     const p = authenticate(o.token);
     if (this.w.finished) throw Error('Match already completed');
     if (this.elapsed > 5 && this.w.mode !== 'quest') throw Error('Match already started');

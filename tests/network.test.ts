@@ -86,6 +86,7 @@ async function training(s: any) {
   const r = await new Client(base.replace('http', 'ws')).create('battle', {
       mode: 'tutorial',
       demo: true,
+      protocol: 2,
       token: s.token,
     }),
     p = play(r, s.profile.id);
@@ -104,14 +105,21 @@ it('authenticates two clients, exchanges attacks, records one winner and rejects
     new Client(base.replace('http', 'ws')).create('quest', {
       mode: 'quest',
       demo: true,
+      protocol: 2,
       token: a.token,
     }),
   ).rejects.toThrow();
   await Promise.all([training(a), training(b)]);
   const c = new Client(base.replace('http', 'ws')),
-    r1 = await c.joinOrCreate('battle', { mode: 'duel', demo: true, token: a.token, squadId: '' }),
+    r1 = await c.joinOrCreate('battle', {
+      mode: 'duel',
+      demo: true,
+      protocol: 2,
+      token: a.token,
+      squadId: '',
+    }),
     p1 = play(r1, a.profile.id),
-    r2 = await c.joinById(r1.roomId, { mode: 'duel', demo: true, token: b.token }),
+    r2 = await c.joinById(r1.roomId, { mode: 'duel', demo: true, protocol: 2, token: b.token }),
     p2 = play(r2, b.profile.id);
   try {
     const result = await p1.done;
@@ -132,7 +140,7 @@ it('authenticates two clients, exchanges attacks, records one winner and rejects
 it('reconnects a dropped authenticated participant into the same live room', async () => {
   const s = await session('Reconnect Knight'),
     c = new Client(base.replace('http', 'ws')),
-    r = await c.create('battle', { mode: 'tutorial', demo: true, token: s.token });
+    r = await c.create('battle', { mode: 'tutorial', demo: true, protocol: 2, token: s.token });
   const p = play(r, s.profile.id, false);
   await new Promise((resolve) => setTimeout(resolve, 500));
   const before = p.state()!;
@@ -159,8 +167,8 @@ it('shares invite-code lobbies, validates chat, and waits for all connected read
   const joined = await request('/squad', b, { code: squad.code });
   expect(joined.id).toBe(squad.id);
   const c = new Client(base.replace('http', 'ws')),
-    r1 = await c.joinOrCreate('squad-lobby', { squadId: squad.id, token: a.token }),
-    r2 = await c.joinOrCreate('squad-lobby', { squadId: squad.id, token: b.token });
+    r1 = await c.joinOrCreate('squad-lobby', { squadId: squad.id, protocol: 2, token: a.token }),
+    r2 = await c.joinOrCreate('squad-lobby', { squadId: squad.id, protocol: 2, token: b.token });
   let starts = 0;
   const chat: any[] = [];
   for (const r of [r1, r2]) {
@@ -188,7 +196,7 @@ it('shares invite-code lobbies, validates chat, and waits for all connected read
 it('restores the completed result when reconnecting during the result-screen grace period', async () => {
   const s = await session('Result Reconnect'),
     c = new Client(base.replace('http', 'ws')),
-    r = await c.create('battle', { mode: 'tutorial', demo: true, token: s.token }),
+    r = await c.create('battle', { mode: 'tutorial', demo: true, protocol: 2, token: s.token }),
     p = play(r, s.profile.id);
   await p.done;
   p.stop();
@@ -220,6 +228,7 @@ it('completes the demo journey through real simulated inputs and isolated reward
       r = await c.create(mode === 'squad' ? 'conquest' : mode === 'quest' ? 'quest' : 'battle', {
         mode,
         demo: true,
+        protocol: 2,
         token: s.token,
         squadId: squad?.id ?? '',
       }),

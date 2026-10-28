@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { PROTOCOL_VERSION, type Geometry } from './presentation';
+import type { CampaignState } from './campaign';
 export const WIDTH = 1200,
   HEIGHT = 760,
   DT = 1 / 30;
@@ -16,7 +18,7 @@ export const inputSchema = z
   })
   .strict();
 export type Input = z.infer<typeof inputSchema>;
-export type Mode = 'tutorial' | 'duel' | 'squad' | 'quest';
+export type Mode = 'tutorial' | 'duel' | 'squad' | 'quest' | 'campaign';
 export type Role = 'guardian' | 'spear' | 'archer' | 'rider';
 export const ROLES: Role[] = ['guardian', 'spear', 'archer', 'rider'];
 export function shuffledRoles(random: () => number = Math.random): Role[] {
@@ -28,6 +30,11 @@ export function shuffledRoles(random: () => number = Math.random): Role[] {
   return roles;
 }
 export interface Fighter {
+  mount?: { heading: number; speed: number; gait: number };
+  kind?: 'warrior' | 'hyena' | 'caster' | 'warden' | 'civilian';
+  honor?: number;
+  prestige?: number;
+  revived?: number;
   id: string;
   name: string;
   hero: number;
@@ -40,6 +47,7 @@ export interface Fighter {
   vy: number;
   aim: number;
   hp: number;
+  maxHp?: number;
   stamina: number;
   cooldown: number;
   dodge: number;
@@ -61,6 +69,7 @@ export interface Fighter {
   puzzleCredits: number;
 }
 export interface Projectile {
+  kind?: 'arrow' | 'spear' | 'magic';
   id: number;
   owner: string;
   team: number;
@@ -77,6 +86,10 @@ export interface Zone {
   progress: number;
 }
 export interface World {
+  protocol: number;
+  geometry?: Geometry;
+  wind?: { x: number; y: number };
+  campaign?: CampaignState;
   mode: Mode;
   demo: boolean;
   phase: string;
@@ -172,6 +185,7 @@ export function fighter(
 }
 export function world(mode: Mode, demo: boolean): World {
   return {
+    protocol: PROTOCOL_VERSION,
     mode,
     demo,
     phase: mode === 'quest' ? 'artifacts' : mode === 'tutorial' ? 'movement' : 'battle',
@@ -227,21 +241,67 @@ export function segmentHit(
     t = Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / (dx * dx + dy * dy || 1)));
   return Math.hypot(ax + t * dx - cx, ay + t * dy - cy) < r;
 }
-function wall(x: number, y: number, r = 20) {
+export function wall(x: number, y: number, r = 20, geometry?: Geometry) {
   return (
     x < 60 + r ||
-    x > WIDTH - 60 - r ||
+    x > (geometry?.width ?? WIDTH) - 60 - r ||
     y < 80 + r ||
-    y > HEIGHT - 60 - r ||
-    obstacles.some((o) => x + r > o.x && x - r < o.x + o.w && y + r > o.y && y - r < o.y + o.h)
+    y > (geometry?.height ?? HEIGHT) - 60 - r ||
+    (geometry?.obstacles ?? obstacles).some(
+      (o) => x + r > o.x && x - r < o.x + o.w && y + r > o.y && y - r < o.y + o.h,
+    )
   );
 }
-export function move(p: Fighter, i: Input, dt: number) {
+export function move(p: Fighter, i: Input, dt: number, geometry?: Geometry) {
   p.aim = i.aim;
   p.block = i.block && p.stamina > 5 && p.attack <= 0;
   if (p.stun > 0 || p.hp <= 0) return;
   const len = Math.hypot(i.x, i.y) || 1,
-    speed = p.block ? 85 : p.role === 'rider' ? 240 : 205;
+    speed =
+      (p.block
+        ? 85
+        : p.kind === 'warden'
+          ? 110
+          : p.kind === 'hyena'
+            ? 245
+            : p.role === 'rider'
+              ? 240
+              : 205) * (geometry?.friction ?? 1);
+  if (p.mount) {
+    p.x = Math.max(86, Math.min((geometry?.width ?? WIDTH) - 86, p.x));
+    p.y = Math.max(106, Math.min((geometry?.height ?? HEIGHT) - 86, p.y));
+    const m = p.mount,
+      wants = Math.hypot(i.x, i.y) > 0.1;
+    if (wants) {
+      const desired = Math.atan2(i.y, i.x),
+        turn = (3.4 - Math.min(1.7, m.speed / 200)) * dt;
+      m.heading += Math.max(-turn, Math.min(turn, angleDiff(desired, m.heading)));
+    }
+    const target = wants ? (p.block ? 145 : 355) * (geometry?.friction ?? 1) : 0;
+    m.speed += (target - m.speed) * Math.min(1, dt * (wants ? 1.6 : 3.5));
+    m.gait += (m.speed * dt) / 45;
+    p.vx = Math.cos(m.heading) * m.speed;
+    p.vy = Math.sin(m.heading) * m.speed;
+    if (i.dodge && p.dodge <= 0 && p.stamina >= 25) {
+      p.stamina -= 25;
+      p.dodge = 1.4;
+      p.invulnerable = 0.3;
+      m.speed = Math.min(430, m.speed + 90);
+    }
+    const nx = p.x + p.vx * dt,
+      ny = p.y + p.vy * dt;
+    if (!wall(nx, p.y, 26, geometry)) p.x = nx;
+    else {
+      m.speed *= 0.3;
+      p.vx = 0;
+    }
+    if (!wall(p.x, ny, 26, geometry)) p.y = ny;
+    else {
+      m.speed *= 0.3;
+      p.vy = 0;
+    }
+    return;
+  }
   if (i.dodge && p.dodge <= 0 && p.stamina >= 25) {
     p.stamina -= 25;
     p.dodge = 1.1;
@@ -259,9 +319,9 @@ export function move(p: Fighter, i: Input, dt: number) {
   }
   const nx = p.x + p.vx * dt,
     ny = p.y + p.vy * dt;
-  if (!wall(nx, p.y)) p.x = nx;
+  if (!wall(nx, p.y, 20, geometry)) p.x = nx;
   else p.vx = 0;
-  if (!wall(p.x, ny)) p.y = ny;
+  if (!wall(p.x, ny, 20, geometry)) p.y = ny;
   else p.vy = 0;
 }
 export function botInput(p: Fighter, w: World): Input {
@@ -289,7 +349,7 @@ export function botInput(p: Fighter, w: World): Input {
   let x = d > reach ? dx / (d || 1) : 0,
     y = d > reach ? dy / (d || 1) : 0;
   if (
-    obstacles.some(
+    (w.geometry?.obstacles ?? obstacles).some(
       (o) => p.x > o.x - 45 && p.x < o.x + o.w + 45 && p.y > o.y - 45 && p.y < o.y + o.h + 45,
     )
   ) {
@@ -308,7 +368,7 @@ export function botInput(p: Fighter, w: World): Input {
     interact: false,
   };
 }
-function event(
+export function event(
   w: World,
   kind: string,
   x: number,
@@ -320,7 +380,7 @@ function event(
   w.events.push({ tick: w.tick, kind, x, y, actor, amount, text });
   if (w.events.length > 80) w.events.shift();
 }
-function damage(w: World, p: Fighter, t: Fighter, amount: number) {
+export function damage(w: World, p: Fighter, t: Fighter, amount: number) {
   if (t.hp <= 0 || t.invulnerable > 0) return;
   const blocked = t.block && Math.abs(angleDiff(Math.atan2(p.y - t.y, p.x - t.x), t.aim)) < 1.2;
   if (blocked) {
@@ -359,7 +419,7 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
       p[key] = Math.max(0, p[key] - dt);
     p.stamina = Math.min(100, p.stamina + dt * (p.block ? 2 : 17));
     if (p.hp <= 0) {
-      if (w.mode === 'squad' || (w.mode === 'quest' && w.phase !== 'challenge')) {
+      if (w.mode === 'squad' || (isBoss(w) && p.team === 0 && w.phase !== 'challenge')) {
         p.respawn -= dt;
         if (p.respawn <= 0) {
           p.hp = 100;
@@ -370,9 +430,14 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
       }
       continue;
     }
-    const i = p.bot ? botInput(p, w) : inputs.get(p.id);
+    const i =
+      w.mode === 'campaign'
+        ? (inputs.get(p.id) ?? (p.bot ? botInput(p, w) : undefined))
+        : p.bot
+          ? botInput(p, w)
+          : inputs.get(p.id);
     if (i) {
-      move(p, i, dt);
+      move(p, i, dt, w.geometry);
       p.seq = i.seq;
       if (i.ability && p.ability <= 0 && p.stamina >= 30) {
         p.stamina -= 30;
@@ -380,9 +445,9 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
         if (p.role === 'guardian') {
           p.invulnerable = 1;
           for (const q of w.players.filter(
-            (q) => q.team === p.team && Math.hypot(q.x - p.x, q.y - p.y) < 160,
+            (q) => q.hp > 0 && q.team === p.team && Math.hypot(q.x - p.x, q.y - p.y) < 160,
           ))
-            q.hp = Math.min(100, q.hp + 12);
+            q.hp = Math.min(q.maxHp ?? 100, q.hp + 12);
         } else if (p.role === 'rider') {
           p.invulnerable = 0.5;
           p.vx = Math.cos(p.aim) * 700;
@@ -396,16 +461,17 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
         p.attack = 0.34;
         p.attackId++;
         p.hits = [];
-        event(w, 'swing', p.x, p.y, p.id);
-        if (p.role === 'archer' && w.mode !== 'duel' && w.mode !== 'tutorial')
+        event(w, p.mount || p.role === 'archer' ? 'throw' : 'swing', p.x, p.y, p.id);
+        if ((p.mount || p.role === 'archer') && w.mode !== 'duel' && w.mode !== 'tutorial')
           w.projectiles.push({
             id: w.tick * 100 + w.players.indexOf(p),
             owner: p.id,
+            kind: p.mount ? 'spear' : p.kind === 'caster' ? 'magic' : 'arrow',
             team: p.team,
             x: p.x,
             y: p.y,
-            vx: Math.cos(p.aim) * 620,
-            vy: Math.sin(p.aim) * 620,
+            vx: Math.cos(p.aim) * (620 + (p.mount?.speed ?? 0) * 0.45),
+            vy: Math.sin(p.aim) * (620 + (p.mount?.speed ?? 0) * 0.45),
             life: 1.2,
           });
       }
@@ -413,7 +479,8 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
     if (p.attack > 0) {
       p.attack -= dt;
       if (p.attack < 0.23 && p.attack > 0.09) {
-        const ranged = p.role === 'archer' && w.mode !== 'duel' && w.mode !== 'tutorial';
+        const ranged =
+          (p.mount || p.role === 'archer') && w.mode !== 'duel' && w.mode !== 'tutorial';
         if (!ranged) {
           for (const t of w.players)
             if (
@@ -426,10 +493,11 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
             }
         }
         if (
-          w.mode === 'quest' &&
+          isBoss(w) &&
           ['guardian', 'challenge', 'eclipse'].includes(w.phase) &&
           p.team === 0 &&
           w.telegraph !== 'shield' &&
+          !w.campaign?.shielded &&
           !p.hits.includes('boss') &&
           inArc(p, { x: w.bossX, y: w.bossY }, 150, 1.3) &&
           (w.phase !== 'challenge' || w.challengeOrder[w.challenger] === p.id)
@@ -453,34 +521,41 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
       const dx = q.x - p.x,
         dy = q.y - p.y,
         d = Math.hypot(dx, dy);
-      if (d < 40 && d > 0.01) {
-        const push = (40 - d) / 2;
-        if (!wall(p.x - (dx / d) * push, p.y - (dy / d) * push)) {
+      const pr = p.mount ? 26 : 20,
+        qr = q.mount ? 26 : 20;
+      if (d < pr + qr && d > 0.01) {
+        const push = (pr + qr - d) / 2;
+        if (!wall(p.x - (dx / d) * push, p.y - (dy / d) * push, pr, w.geometry)) {
           p.x -= (dx / d) * push;
           p.y -= (dy / d) * push;
         }
-        if (!wall(q.x + (dx / d) * push, q.y + (dy / d) * push)) {
+        if (!wall(q.x + (dx / d) * push, q.y + (dy / d) * push, qr, w.geometry)) {
           q.x += (dx / d) * push;
           q.y += (dy / d) * push;
         }
       }
     }
   for (const a of w.projectiles) {
+    if (a.kind === 'spear' && w.wind) {
+      a.vx += w.wind.x * dt;
+      a.vy += w.wind.y * dt;
+    }
     const nx = a.x + a.vx * dt,
       ny = a.y + a.vy * dt;
     for (const t of w.players)
       if (t.team !== a.team && t.hp > 0 && segmentHit(a.x, a.y, nx, ny, t.x, t.y, 22)) {
         const owner = w.players.find((p) => p.id === a.owner);
-        if (owner) damage(w, owner, t, 16);
+        if (owner) damage(w, owner, t, a.kind === 'spear' ? 24 : 16);
         else if (a.owner === 'boss') bossHit(w, t, w.demo ? 8 : 16);
         a.life = 0;
         break;
       }
     if (
       a.team === 0 &&
-      w.mode === 'quest' &&
+      isBoss(w) &&
       ['guardian', 'challenge', 'eclipse'].includes(w.phase) &&
       w.telegraph !== 'shield' &&
+      !w.campaign?.shielded &&
       a.life > 0 &&
       segmentHit(a.x, a.y, nx, ny, w.bossX, w.bossY, 50) &&
       (w.phase !== 'challenge' || w.challengeOrder[w.challenger] === a.owner)
@@ -496,7 +571,7 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
       }
       a.life = 0;
     }
-    if (wall(nx, ny, 3)) a.life = 0;
+    if (wall(nx, ny, 3, w.geometry)) a.life = 0;
     a.x = nx;
     a.y = ny;
     a.life -= dt;
@@ -544,7 +619,10 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
       w.winner = w.scores[0] >= w.scores[1] ? 0 : 1;
     }
   }
-  if (w.mode === 'quest') quest(w, inputs, dt);
+  if (isBoss(w)) quest(w, inputs, dt);
+}
+export function isBoss(w: World) {
+  return w.mode === 'quest' || !!w.campaign?.boss;
 }
 function startBoss(w: World, phase: string, hp: number) {
   w.phase = phase;
@@ -561,7 +639,7 @@ function startBoss(w: World, phase: string, hp: number) {
         (a, b) => b.contribution - a.contribution || w.players.indexOf(a) - w.players.indexOf(b),
       )
       .map((p) => p.id);
-  for (const p of w.players) {
+  for (const p of w.players.filter((p) => p.team === 0)) {
     p.hp = 100;
     p.respawn = 0;
   }

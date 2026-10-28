@@ -1,6 +1,6 @@
-# Ethiopian Knights: The Battle for the Throne
+# ክብረ ጉግስ — Kibre Gugs
 
-A playable, server-authoritative Ethiopian-inspired fantasy action game. Train, duel, conquer banners with a four-member squad, demonstrate fellowship, solve the citadel puzzle, and defeat the enchanted King.
+A playable, server-authoritative Ethiopian-inspired fantasy action game with an illustrated isometric battlefield, articulated warriors and mounts, fifteen mission mechanics, persistent checkpoints, a separate story demo, rated duels and four-banner squad combat.
 
 The kingdom of Aksumara and its story are fictional. Artwork draws respectfully from Ethiopian textiles, metalwork, architecture and landscapes; the fantasy is not presented as history.
 
@@ -15,21 +15,23 @@ pnpm dev
 
 On Windows with restricted PowerShell scripts, use `pnpm.cmd` in place of `pnpm`. Open **http://localhost:5173**. The API and Colyseus server use port **2567**. No API keys, Docker, wallet, payment, or external database is required for local play. Profiles, signing secret, results and progression persist in `data/knights.sqlite` using SQLite WAL. Keep this directory to retain progress.
 
-Choose **Play the Story Demo** for the complete accelerated journey. Normal progression requires the tutorial, ten qualifying duel wins, then two squad wins and 1100 squad rating. Every third duel loss removes one qualifying victory; historical wins remain intact and unlocked stages never relock. Guest mode cannot complete genuine four-human gathering verification; use configured Supabase authentication for that flow.
+Choose **Play the Story Demo** for the condensed seven-mission journey. Normal campaign progression is mission-based, with a 45–60 minute first-play target; the demo targets 8–12 minutes. These targets still need human playtesting. Competitive qualification remains separate: ten qualifying duel wins, then two squad wins and 1100 squad rating. Every third duel loss removes one qualifying victory; historical wins and legacy unlocks remain. Genuine Royal Gathering requires four authenticated Supabase accounts; demo fellowship is explicitly simulated. See [campaign mechanics](docs/CAMPAIGN.md).
 
 ## Controls
 
-| Input       | Action                                                        |
-| ----------- | ------------------------------------------------------------- |
-| WASD        | Move                                                          |
-| Mouse       | Aim                                                           |
-| Left mouse  | Strike / assigned role attack                                 |
-| Right mouse | Directional block                                             |
-| Space       | Dodge                                                         |
-| Q           | Role ability                                                  |
-| E           | Collect a seal / activate a pillar                            |
-| Tab         | Battle contributions                                          |
-| Escape      | Release controls / settings overlay; the live match continues |
+| Input         | Action                                                        |
+| ------------- | ------------------------------------------------------------- |
+| WASD / arrows | Screen-relative movement                                      |
+| Mouse         | Aim                                                           |
+| Left mouse    | Strike / assigned role attack                                 |
+| Right mouse   | Directional block                                             |
+| Space         | Dodge                                                         |
+| Q             | Role ability                                                  |
+| E             | Interact / hold to rescue or revive                           |
+| Wheel / + / − | Zoom                                                          |
+| F             | Fullscreen                                                    |
+| Tab           | Battle contributions                                          |
+| Escape        | Release controls / settings overlay; the live match continues |
 
 Warrior selection is cosmetic. Duels and training use equal sword/shield rules. Squad and quest roles are assigned by the server. Matchmaking waits five seconds for humans, then uses labeled AI. To test a human duel, complete training in two independent browser sessions and enter the arena together. For squads, share the six-character invite code; connected members ready up together in the lobby.
 
@@ -45,7 +47,7 @@ pnpm test:load          # requires the local server to be running
 pnpm exec tsx scripts/contracts.ts
 ```
 
-The tests cover simulation, progression, canonical hashing, transactional result persistence, attestation retries, local Solidity deployment and access control, real two-client combat, reconnection, and the complete demo through server input commands. Playwright tests operate the UI with keyboard/mouse and save screenshots under `output/playwright/`. The load script runs 20 concurrent authenticated clients in separate rooms for 15 seconds and prints measured simulation rates. Tests use isolated in-memory server databases; browser tests create explicitly labeled demo records on the local server.
+Tests cover API failures, legacy SQLite records, projection, mounted steering/wind, mission gates/puzzles/rescues, transactional rewards, canonical hashing, contracts, two-client combat and reconnection. Playwright uses real keyboard/mouse input and a dedicated in-memory backend on 2570 with a test frontend on 5174. Prior-mission fixtures support individual normal-mechanic tests; the complete demo advances without injected victories. Screenshots go to `output/playwright/`. The load script exercises nineteen input clients plus one rendered browser, with combat, monsters and projectiles over thirty seconds, writing tick and FPS measurements to `output/load-expanded.json`. It needs both local dev servers and installed Chromium.
 
 ## Real, simulated, and optional
 
