@@ -72,6 +72,7 @@ export function connection() {
     ws: import.meta.env.VITE_WS_URL,
     hostname: location.hostname,
     protocol: location.protocol,
+    host: location.host,
   });
 }
 let warming: Promise<void> | null = null;

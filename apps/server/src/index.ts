@@ -8,6 +8,9 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Server } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import { z } from 'zod';
@@ -323,6 +326,24 @@ app.post('/api/demo/reset', async (_q, r) => {
   const n = await createProfile(p.name, true);
   r.json({ token: token(n), profile: n });
 });
+// Single-service deploys (Render) serve the built web app from the same origin as the API and
+// WebSocket. Colyseus answers /matchmake before Express, so only /api must stay out of the fallback.
+const web = fileURLToPath(new URL('../../web/dist', import.meta.url));
+if (existsSync(join(web, 'index.html'))) {
+  app.use(
+    express.static(web, {
+      index: false,
+      setHeaders: (r, file) => {
+        if (/[\\/]assets[\\/].+-[\w-]{8}\.(js|css)$/.test(file))
+          r.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      },
+    }),
+  );
+  app.get(/^(?!\/api(?:\/|$)).*/, (_q, r) => {
+    r.setHeader('Cache-Control', 'no-cache');
+    r.sendFile(join(web, 'index.html'));
+  });
+}
 app.use((err: Error, _q: express.Request, r: express.Response, _n: express.NextFunction) => {
   const status =
     err.name === 'ZodError'

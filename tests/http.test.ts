@@ -31,7 +31,11 @@ it.each([
 });
 it('rejects absent or insecure production endpoints and permits local development', () => {
   const production = { dev: false, hostname: 'game.vercel.app', protocol: 'https:' };
-  expect(() => endpoints(production)).toThrow('not configured');
+  expect(endpoints({ ...production, host: 'game.onrender.com' })).toEqual({
+    api: '',
+    ws: 'wss://game.onrender.com',
+  });
+  expect(() => endpoints({ ...production, protocol: 'http:' })).toThrow('HTTPS');
   expect(() => endpoints({ ...production, api: 'http://localhost:2567' })).toThrow('HTTPS');
   expect(() => endpoints({ ...production, api: 'https://game.up.railway.app', ws: '' })).toThrow(
     'VITE_WS_URL',

@@ -22,9 +22,9 @@ if (process.env.NODE_ENV === 'production') {
     !(process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)
   )
     throw Error('Production requires Supabase authentication/storage credentials on Render');
-  const origins = (process.env.CORS_ORIGINS ?? '').split(',');
+  // Optional when the server also serves the web app (same origin); required for a separate frontend.
+  const origins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : [];
   if (
-    !origins.length ||
     origins.some((origin) => {
       try {
         const u = new URL(origin.trim());

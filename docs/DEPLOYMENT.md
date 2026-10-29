@@ -1,6 +1,16 @@
-# Deploy ክብረ ጉግስ: Vercel + free Render + free Supabase
+# Deploy ክብረ ጉግስ: free Render + free Supabase
 
-Keep the existing Vercel and Supabase projects. Render runs one Node/Colyseus instance; Supabase Postgres holds authoritative records. SQLite is for local development. No Railway, Neon or persistent disk is required.
+One Render web service builds the web app and serves it together with the API and Colyseus WebSocket from the same origin. Supabase Postgres holds authoritative records, auth and private storage. SQLite is for local development. No Vercel, Railway, Neon or persistent disk is required.
+
+**Quick path for a new deployment:**
+
+1. Supabase SQL editor: apply the migrations (section 2).
+2. Render: New → Blueprint (or Web Service → Docker) from this repository and set the variables in section 4. Because the web app is same-origin, leave VITE_API_URL, VITE_WS_URL and CORS_ORIGINS unset.
+3. Open https://YOUR-SERVICE.onrender.com/api/health and check that it shows persistence "supabase" (section 5).
+4. Supabase Authentication → URL Configuration: set the Site URL and a redirect to https://YOUR-SERVICE.onrender.com/ (section 6).
+5. Play at https://YOUR-SERVICE.onrender.com/.
+
+Sections 7 (Vercel) and CORS_ORIGINS only apply if you choose to host the frontend separately.
 
 ## 1. Back up and validate
 
@@ -47,14 +57,16 @@ Push the reviewed source and assets to your repository. In Render choose New →
 | SESSION_SECRET                                   | Preserved active signing secret; strong random secret for a new installation  |
 | SUPABASE_URL                                     | Existing project URL                                                          |
 | SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY | Backend-only privileged Supabase key                                          |
-| CORS_ORIGINS                                     | https://ethiopian-history-based-game-for-ha.vercel.app                        |
+| VITE_SUPABASE_URL                                | Existing project URL (public; baked into the web build)                       |
+| VITE_SUPABASE_PUBLISHABLE_KEY                    | Frontend-safe publishable/anon key, never the service key                     |
+| CORS_ORIGINS                                     | Unset for the single service; only for a separate frontend origin             |
 | ENABLE_DEMO                                      | true                                                                          |
 | ALLOW_CHAIN_BROADCAST                            | false until separately authorized                                             |
 | AGE_REVIEWER_IDS                                 | Leave unset until cleanup and reviewer setup are verified                     |
 
 The server connects to Postgres with full TLS certificate verification. Supabase signs its database and pooler certificates with its own root CA, which Node does not trust by default, so without SUPABASE_DB_CA startup fails with `SELF_SIGNED_CERT_IN_CHAIN` and the health check never passes. Download the certificate from Supabase Dashboard → Project Settings → Database → SSL Configuration and paste the whole PEM, including the BEGIN/END lines, as the value. Escaped `\n` newlines are accepted. The same variable is used by scripts/import-sqlite.ts.
 
-CORS_ORIGINS is set in the dashboard (`sync: false` in render.yaml). Production startup refuses anything other than exact https origins, so use the Vercel origin with no path or trailing slash, comma-separating any custom domain or preview origin you also want.
+The Docker build runs `pnpm build` and Render passes the service's environment variables to it as build arguments, so VITE_SUPABASE_* changes require a redeploy (Manual Deploy → Deploy latest commit). If you do host a separate frontend, set CORS_ORIGINS to its exact https origins with no path or trailing slash; production startup refuses anything else.
 
 Render supplies PORT. Copy the service's actual domain. If it is kibre-gugs-server-EXAMPLE.onrender.com, the API origin is https://kibre-gugs-server-EXAMPLE.onrender.com and WebSocket origin is wss://kibre-gugs-server-EXAMPLE.onrender.com. Replace the example domain. Append no /api or /matchmake to these environment values.
 
@@ -78,7 +90,9 @@ Under Authentication → URL Configuration:
 
 Keep email authentication enabled. Add only intentional preview redirects. A guest remains a guest; selecting an authenticated account does not silently merge a different guest's progress.
 
-## 7. Configure and redeploy Vercel
+## 7. Optional: host the frontend on Vercel instead
+
+Skip this section for the single Render service.
 
 Use repository root (leave Root Directory empty), and let the root vercel.json supply the install command, build command pnpm build and output directory apps/web/dist. There is no apps/web/vercel.json; the web package has no dependencies of its own.
 

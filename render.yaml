@@ -25,8 +25,12 @@ services:
         sync: false
       - key: SUPABASE_SECRET_KEY
         sync: false
-      # Exact https origins of the Vercel frontend, comma separated, no trailing slash.
-      - key: CORS_ORIGINS
+      # This service also serves the web app, so the browser API is same-origin and
+      # CORS_ORIGINS is only needed if a separate frontend (e.g. Vercel) calls it.
+      # Public Supabase values baked into the web build (frontend-safe; never the service key).
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_PUBLISHABLE_KEY
         sync: false
       # Leave unset until the age-cleanup schedule is verified (see docs/DEPLOYMENT.md).
       - key: AGE_REVIEWER_IDS

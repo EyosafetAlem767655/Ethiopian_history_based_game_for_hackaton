@@ -15,20 +15,20 @@ export interface EndpointOptions {
   ws?: string;
   hostname: string;
   protocol: string;
+  /** location.host; used when the game server also serves this page (single Render service). */
+  host?: string;
 }
 export function endpoints(o: EndpointOptions) {
   const api = (o.api ?? '').trim().replace(/\/+$/, '');
-  if (!o.dev && !api)
-    throw new ApiError(
-      'The game server is not configured. Set VITE_API_URL and VITE_WS_URL in Vercel, then redeploy.',
-      0,
-      'SERVER_NOT_CONFIGURED',
-    );
+  const scheme = o.protocol === 'https:' ? 'wss' : 'ws';
+  // Without VITE_API_URL a production build talks to the origin that served it.
   const ws = (
     o.ws ??
     (api
       ? api.replace(/^http/, 'ws')
-      : `${o.protocol === 'https:' ? 'wss' : 'ws'}://${o.hostname}:2567`)
+      : o.dev
+        ? `${scheme}://${o.hostname}:2567`
+        : `${scheme}://${o.host ?? o.hostname}`)
   )
     .trim()
     .replace(/\/+$/, '');
