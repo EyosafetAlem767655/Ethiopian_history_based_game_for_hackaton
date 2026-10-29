@@ -266,7 +266,7 @@ function App() {
   const nav = [
     ['home', '⌂', 'The kingdom'],
     ['journey', '◇', 'Your journey'],
-    ['arena', '⚔', 'Royal arena'],
+    ['arena', '⚔', 'Battle arena'],
     ['squad', '☏', 'Team room'],
     ['heroes', '♜', 'Warriors'],
     ['leaderboard', '♛', 'Hall of legends'],
@@ -593,7 +593,7 @@ function App() {
                 <div className="section-title">
                   <div>
                     <span className="eyebrow">WELCOME, {session.profile.name.toUpperCase()}</span>
-                    <h1>Your road to the throne.</h1>
+                    <h1>Battle Arena</h1>
                   </div>
                   <span className="demo-tag">
                     {isDemo ? 'ISOLATED STORY DEMO' : 'NORMAL PROGRESSION'}
@@ -604,9 +604,8 @@ function App() {
                   <div>
                     <h2>{heroes[hero].name}</h2>
                     <p>
-                      {isDemo
-                        ? 'A complete adventure. Real combat. Your legend in three chapters.'
-                        : 'Ten qualifying victories open the path to the Four Banners.'}
+                      Fight a 1v1 duel or gather a team for 4v4 Banner Conquest. Story missions are
+                      under Your journey.
                     </p>
                     <span className="eyebrow">
                       {progress?.xp ?? 0} LIFETIME XP <span className="divider">/</span>{' '}
@@ -637,7 +636,7 @@ function App() {
                       <span className="eyebrow">
                         {progress?.qualifying ?? 0} / {isDemo ? 1 : 10} QUALIFYING VICTORIES
                       </span>
-                      <h2>The Warrior’s Trial</h2>
+                      <h2>1v1 Duel Arena</h2>
                       <p>
                         A 75-second duel. A human rival, or a worthy AI opponent after five seconds.
                       </p>
@@ -649,12 +648,13 @@ function App() {
                     >
                       ENTER ARENA ⚔
                     </button>
+                    {!progress?.tutorial && <small>Complete training above to unlock duels.</small>}
                   </article>
                   <article>
                     <div className="step-number">02</div>
                     <div>
                       <span className="eyebrow">{progress?.squadRating ?? 1000} SQUAD RATING</span>
-                      <h2>The Four Banners</h2>
+                      <h2>4v4 Team Arena</h2>
                       <p>Gather your squad. Capture the banners. Earn your Royal Lunch Pass.</p>
                     </div>
                     <button className="outline-btn" disabled={busy} onClick={() => getSquad()}>
@@ -1002,6 +1002,31 @@ function App() {
                   : 'CONNECTING'}
               </div>
               <span className="demo-tag">{isDemo ? 'STORY DEMO' : 'LIVE ARENA'}</span>
+            </div>
+            <div className="arena-room-banner" role="status">
+              <strong>
+                {snapshot?.campaign
+                  ? 'STORY MISSION'
+                  : snapshot?.mode === 'squad'
+                    ? '4V4 TEAM ARENA'
+                    : snapshot?.mode === 'duel'
+                      ? '1V1 DUEL ARENA'
+                      : 'TRAINING ARENA'}
+              </strong>
+              <span>
+                {waiting > 0
+                  ? 'MATCHMAKING · WAITING FOR PLAYERS'
+                  : snapshot?.finished
+                    ? 'MATCH FINISHED'
+                    : 'CONNECTED TO ARENA'}
+              </span>
+              <span>Room: {room?.roomId ?? 'Connecting…'}</span>
+              <span>
+                {snapshot?.players.filter((p) => p.kind === 'warrior' && !p.bot).length ?? 0}{' '}
+                human-controlled ·{' '}
+                {snapshot?.players.filter((p) => p.kind === 'warrior' && p.bot).length ?? 0}{' '}
+                AI-controlled
+              </span>
             </div>
             <ScrollGuide
               id={
