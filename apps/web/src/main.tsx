@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 import { useUI, api, saveSession, API, connection } from './store';
 import { requestJSON } from './services/http';
 import { CampaignScreen } from './CampaignScreen';
+import { MatchRecord } from './MatchRecord';
 import { ScrollGuide } from './ScrollGuide';
 import { audio } from './audio';
 import { MISSIONS } from '../../../packages/shared/src/missions';
@@ -905,48 +906,9 @@ function App() {
                 </div>
                 <h2 className="spaced">Battle chronicles</h2>
                 <div className="history-list">
-                  {me?.history?.map((r: any) => {
-                    const p = JSON.parse(r.payload);
-                    return (
-                      <details key={r.id}>
-                        <summary>
-                          <span>
-                            {p.mode.toUpperCase()}{' '}
-                            <small>{new Date(r.created).toLocaleString()}</small>
-                          </span>
-                          <span className="status">{r.status.toUpperCase()}</span>
-                        </summary>
-                        {r.tx && (
-                          <a
-                            className="explorer-link"
-                            href={'https://sepolia.basescan.org/tx/' + r.tx}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            View confirmed transaction ↗
-                          </a>
-                        )}
-                        <p className="hash">
-                          KECCAK-256
-                          <br />
-                          {r.hash}
-                        </p>
-                        <p className="subtle">
-                          A hash verifies the recorded payload’s integrity. A simulated submission
-                          has no blockchain transaction.
-                        </p>
-                        <div className="timeline">
-                          {p.events
-                            ?.filter((e: any) => ['defeat', 'artifact', 'pillar'].includes(e.kind))
-                            .map((e: any, i: number) => (
-                              <div key={i}>
-                                <b>{(e.tick / 30).toFixed(1)}s</b> {e.kind} {e.text ?? ''}
-                              </div>
-                            ))}
-                        </div>
-                      </details>
-                    );
-                  })}
+                  {me?.history?.map((r: any) => (
+                    <MatchRecord key={r.id} record={r} />
+                  ))}
                 </div>
                 {isDemo && (
                   <button
@@ -1163,7 +1125,9 @@ function App() {
                         <b>{Math.round(mine?.contribution ?? 0)}</b>CONTRIBUTION
                       </span>
                     </div>
-                    <span className="verification">◈ KECCAK-256 RECORD · SIMULATED ANCHOR</span>
+                    <span className="verification">
+                      ◈ SERVER RESULT SAVED · VERIFY IN YOUR LEGACY
+                    </span>
                     <button className="gold-btn" onClick={exit}>
                       CONTINUE THE JOURNEY →
                     </button>

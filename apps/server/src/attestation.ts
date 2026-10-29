@@ -4,12 +4,19 @@ import {
   http,
   keccak256,
   stringToHex,
-  parseAbi,
   type Address,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { baseSepolia } from 'viem/chains';
 import { db } from './store';
+import {
+  digest,
+  matchKey,
+  parseResult,
+  recordsAbi,
+  winnerIds,
+} from '../../../packages/shared/src/results';
+export { recordsAbi } from '../../../packages/shared/src/results';
 export interface AttestationAdapter {
   submit(
     matchId: string,
@@ -22,10 +29,6 @@ export class SimulatedAttestation implements AttestationAdapter {
     return { status: 'simulated' as const };
   }
 }
-export const recordsAbi = parseAbi([
-  'function attest(bytes32 matchId,bytes32 resultHash,bytes32 winner)',
-  'function records(bytes32) view returns (bytes32 resultHash,bytes32 winner,uint64 timestamp,address attestor)',
-]);
 export class BaseAttestation implements AttestationAdapter {
   private key;
   private address: Address;
@@ -44,7 +47,8 @@ export class BaseAttestation implements AttestationAdapter {
       chain: baseSepolia,
       transport: this.rpc,
     });
-    const key = keccak256(stringToHex(id));
+    const key = matchKey(id),
+      winnerHash = keccak256(stringToHex(winner));
     const existing = await client.readContract({
       address: this.address,
       abi: recordsAbi,
@@ -52,14 +56,15 @@ export class BaseAttestation implements AttestationAdapter {
       args: [key],
     });
     if (existing[2] > 0n) {
-      if (existing[0] !== hash) throw Error('On-chain hash conflict');
+      if (existing[0] !== hash || existing[1] !== winnerHash)
+        throw Error('On-chain result conflict');
       return { status: 'confirmed' as const };
     }
     const tx = await wallet.writeContract({
       address: this.address,
       abi: recordsAbi,
       functionName: 'attest',
-      args: [key, hash, keccak256(stringToHex(winner))],
+      args: [key, hash, winnerHash],
     });
     db.prepare('UPDATE outbox SET tx=? WHERE match_id=?').run(tx, id);
     const receipt = await client.waitForTransactionReceipt({ hash: tx });
@@ -87,17 +92,13 @@ export async function processOutbox(adapter: AttestationAdapter) {
           'pending',
           row.match_id,
         );
+        const payload = parseResult(row.payload);
+        if (payload.matchId !== row.match_id || digest(payload) !== row.hash)
+          throw Error('Stored result hash mismatch');
         const out = await adapter.submit(
           row.match_id,
           row.hash,
-          JSON.stringify(
-            JSON.parse(row.payload)
-              .participants.filter(
-                (p: { team: number }) => p.team === JSON.parse(row.payload).winner,
-              )
-              .map((p: { id: string }) => p.id)
-              .sort(),
-          ),
+          JSON.stringify(winnerIds(payload)),
         );
         db.prepare('UPDATE outbox SET status=?,tx=COALESCE(?,tx),error=NULL WHERE match_id=?').run(
           out.status,

@@ -18,6 +18,7 @@ import { registerHostedRoutes, exchangeHosted, isHosted, syncHosted } from './ho
 import { BaseAttestation, processOutbox } from './attestation';
 import { BattleRoom } from './room';
 import { SquadLobby } from './lobby';
+import { resultProof } from './result-proof';
 import { leaderboard } from './leaderboard';
 import { CampaignRoom } from './campaign-room';
 import { MISSIONS, DEMO_MISSIONS } from '../../../packages/shared/src/missions';
@@ -128,6 +129,14 @@ app.get('/api/me', (_q, r) => {
     wallet: walletIdentity(p.id),
     campaign: campaignProgress(p.id),
   });
+});
+app.get('/api/results/:id/proof', (q, r) => {
+  const proof = resultProof(q.params.id, r.locals.player.id);
+  if (!proof) {
+    r.status(404).json({ error: 'Result not found in your match history' });
+    return;
+  }
+  r.json(proof);
 });
 app.post('/api/wallet/nonce', (q, r) => {
   try {

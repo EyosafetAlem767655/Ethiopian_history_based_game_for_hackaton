@@ -5,6 +5,7 @@ import { Client, type Room } from 'colyseus.js';
 import { control } from './controller';
 import type { World, Mode } from '../packages/shared/src/game';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { parseResult, verifyPayload } from '../packages/shared/src/results';
 const base = 'http://localhost:2568';
 let process: ChildProcess;
 async function request(path: string, session: any, body?: unknown) {
@@ -62,6 +63,13 @@ it('verifies wallet ownership once and rejects simulated gathering for normal gu
   await expect(
     request('/wallet/bind', s, { address: account.address, signature }),
   ).rejects.toThrow();
+  await training(s);
+  const result = (await request('/me', s)).history[0],
+    proof = await request('/results/' + result.id + '/proof', s);
+  expect(verifyPayload(proof).status).toBe('match');
+  expect(
+    parseResult(proof.payload).participants.find((p) => p.id === s.profile.id)?.identity,
+  ).toMatchObject({ kind: 'wallet', accountId: linked.playerId });
   const normal = await request('/session', null, { name: 'Normal Guest', demo: false });
   await expect(request('/gathering/demo', normal, { squadId: 'fake' })).rejects.toThrow(
     'demo-only',
@@ -165,6 +173,19 @@ it('authenticates two clients, exchanges attacks, records one winner and rejects
     expect(result.winner).toBeGreaterThanOrEqual(0);
     const me = await request('/me', a);
     expect(me.history.filter((h: any) => JSON.parse(h.payload).mode === 'duel')).toHaveLength(1);
+    const record = me.history.find((h: any) => JSON.parse(h.payload).mode === 'duel'),
+      proof = await request('/results/' + record.id + '/proof', a);
+    expect(verifyPayload(proof).status).toBe('match');
+    expect(proof.simulated).toBe(true);
+    expect(proof.chain).toBeNull();
+    expect((await request('/results/' + record.id + '/proof', b)).hash).toBe(proof.hash);
+    const stranger = await session('Proof Stranger');
+    for (const token of [stranger.token, '']) {
+      const denied = await fetch(base + '/api/results/' + record.id + '/proof', {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      expect(denied.status).toBe(token ? 404 : 401);
+    }
     const other = await p2.done;
     expect(other.winner).toBe(result.winner);
   } finally {
