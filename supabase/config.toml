@@ -1,0 +1,4 @@
+# Only function settings are kept here; the project itself is managed in the Supabase dashboard.
+# age-cleanup is called by pg_cron with its own AGE_CLEANUP_SECRET header, not a user JWT.
+[functions.age-cleanup]
+verify_jwt = false

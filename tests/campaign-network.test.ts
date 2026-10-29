@@ -1,8 +1,12 @@
+import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
 import { beforeAll, afterAll, it, expect } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { Client, type Room } from 'colyseus.js';
 import type { World } from '../packages/shared/src/game';
 import { campaignControl } from './campaign-controller';
+const fixturePath = 'output/tests/campaign-' + randomUUID() + '.sqlite';
 const base = 'http://localhost:2572';
 let child: ChildProcess;
 const rooms: Room[] = [];
@@ -24,8 +28,9 @@ async function until(check: () => boolean, ms = 5000) {
   throw Error('Campaign condition did not arrive');
 }
 beforeAll(async () => {
+  mkdirSync('output/tests', { recursive: true });
   child = spawn('node', ['--import', 'tsx', 'apps/server/src/index.ts'], {
-    env: { ...process.env, PORT: '2572', DB_PATH: ':memory:', ALLOW_CHAIN_BROADCAST: 'false' },
+    env: { ...process.env, PORT: '2572', DB_PATH: fixturePath, ALLOW_CHAIN_BROADCAST: 'false' },
     stdio: 'pipe',
   });
   let log = '';
@@ -48,6 +53,16 @@ it('shares an authoritative mission, rejects claims/versions/outsiders, reconnec
   const a = await api('/session', undefined, { name: 'Campaign Alice', demo: true }),
     b = await api('/session', undefined, { name: 'Campaign Bekele', demo: true }),
     outsider = await api('/session', undefined, { name: 'Outside', demo: true });
+  const fixture = new Database(fixturePath);
+  for (const s of [a, b, outsider]) {
+    fixture.prepare('INSERT INTO hosted_identities(id) VALUES (?)').run(s.profile.id);
+    fixture
+      .prepare(
+        'INSERT INTO age_reviews(id,player_id,status,birth_date,created,expires) VALUES (?,?,?,?,?,?)',
+      )
+      .run(randomUUID(), s.profile.id, 'approved', '2003-05-12', Date.now(), Date.now() + 86400000);
+  }
+  fixture.close();
   const c = new Client(base.replace(/^http/, 'ws'));
   await expect(
     c.create('campaign', { missionId: 1, demo: true, token: a.token, protocol: 1 }),
@@ -57,7 +72,7 @@ it('shares an authoritative mission, rejects claims/versions/outsiders, reconnec
   ).rejects.toThrow(/preceding/);
   const squad = await api('/squad', a, {});
   await api('/squad', b, { code: squad.code });
-  const options = { missionId: 1, demo: true, protocol: 2, squadId: squad.id };
+  const options = { missionId: 1, demo: true, protocol: 2, ageBand: '18–24', squadId: squad.id };
   let r1 = await c.joinOrCreate('campaign', { ...options, token: a.token, hero: 0 });
   rooms.push(r1);
   const r2 = await c.joinById(r1.roomId, { ...options, token: b.token, hero: 1 });
@@ -68,6 +83,7 @@ it('shares an authoritative mission, rejects claims/versions/outsiders, reconnec
     r.onMessage('identity', () => {});
     r.onMessage('waiting', () => {});
     r.onMessage('result', () => {});
+    r.onMessage('saving', () => {});
   };
   wire(r1);
   wire(r2);

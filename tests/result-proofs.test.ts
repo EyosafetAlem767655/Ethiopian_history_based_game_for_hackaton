@@ -19,24 +19,24 @@ const { processOutbox } = await import('../apps/server/src/attestation');
 const wallet = '0x1111111111111111111111111111111111111111' as const;
 const contract = '0x2222222222222222222222222222222222222222' as const;
 
-beforeEach(() => {
-  store.db.exec(`DELETE FROM participants; DELETE FROM outbox; DELETE FROM results;
+beforeEach(async () => {
+  await store.db.exec(`DELETE FROM participants; DELETE FROM outbox; DELETE FROM results;
     DELETE FROM profiles; DELETE FROM wallets; DELETE FROM badges;`);
 });
 
-function finishedMatch(demo = false, linked = true) {
-  const player = store.createProfile('Sam', demo),
+async function finishedMatch(demo = false, linked = true) {
+  const player = await store.createProfile('Sam', demo),
     w = world('duel', demo);
-  if (linked) store.db.prepare('INSERT INTO wallets VALUES (?,?)').run(player.id, wallet);
+  if (linked) await store.db.prepare('INSERT INTO wallets VALUES (?,?)').run(player.id, wallet);
   w.players = [fighter(player.id, player.name), fighter('bot-1', 'Practice opponent', 1, true)];
   w.winner = 0;
   w.finished = true;
-  store.recordResult('proof-match', w, new Date().toISOString());
-  const proof = resultProof('proof-match', player.id)!;
+  await store.recordResult('proof-match', w, new Date().toISOString());
+  const proof = (await resultProof('proof-match', player.id))!;
   return { player, w, proof, payload: parseResult(proof.payload) };
 }
-function liveProof(): ResultProof {
-  const { proof } = finishedMatch();
+async function liveProof(): Promise<ResultProof> {
+  const { proof } = await finishedMatch();
   return { ...proof, status: 'confirmed', simulated: false, chain: { chainId: 84532, contract } };
 }
 function readerFor(proof: ResultProof) {
@@ -46,8 +46,8 @@ function readerFor(proof: ResultProof) {
 }
 
 describe('immutable result identity', () => {
-  it('snapshots the verified wallet, name and AI identities into a versioned result', () => {
-    const { player, proof, payload } = finishedMatch();
+  it('snapshots the verified wallet, name and AI identities into a versioned result', async () => {
+    const { player, proof, payload } = await finishedMatch();
     expect(payload.version).toBe(3);
     expect(payload.participants[0]).toMatchObject({
       id: player.id,
@@ -62,50 +62,52 @@ describe('immutable result identity', () => {
     expect(payload.participants[1].identity).toEqual({ kind: 'bot' });
     expect(winnerIds(payload)).toEqual([`eip155:84532:${wallet}`]);
     expect(digest(payload)).toBe(proof.hash);
-    store.db.prepare('DELETE FROM wallets WHERE player_id=?').run(player.id);
-    expect(resultProof('proof-match', player.id)).toEqual(proof);
+    await store.db.prepare('DELETE FROM wallets WHERE player_id=?').run(player.id);
+    expect(await resultProof('proof-match', player.id)).toEqual(proof);
   });
 
-  it('does not retroactively attach a wallet to older guest results', () => {
-    const { player, proof, payload } = finishedMatch(false, false);
+  it('does not retroactively attach a wallet to older guest results', async () => {
+    const { player, proof, payload } = await finishedMatch(false, false);
     expect(payload.participants[0].identity).toEqual({ kind: 'profile' });
-    store.db.prepare('INSERT INTO wallets VALUES (?,?)').run(player.id, wallet);
-    expect(resultProof('proof-match', player.id)).toEqual(proof);
+    await store.db.prepare('INSERT INTO wallets VALUES (?,?)').run(player.id, wallet);
+    expect(await resultProof('proof-match', player.id)).toEqual(proof);
     expect(winnerIds(payload)).toEqual([`profile:${player.id}`]);
   });
 
-  it('retains the player wallet when an AI substitutes for a disconnected human', () => {
-    const player = store.createProfile('Disconnected', false),
+  it('retains the player wallet when an AI substitutes for a disconnected human', async () => {
+    const player = await store.createProfile('Disconnected', false),
       w = world('duel', false);
-    store.db.prepare('INSERT INTO wallets VALUES (?,?)').run(player.id, wallet);
+    await store.db.prepare('INSERT INTO wallets VALUES (?,?)').run(player.id, wallet);
     w.players = [fighter(player.id, player.name, 0, true)];
     w.winner = 0;
     w.finished = true;
-    store.recordResult('substitute', w, new Date().toISOString());
-    const payload = parseResult(resultProof('substitute', player.id)!.payload);
+    await store.recordResult('substitute', w, new Date().toISOString());
+    const payload = parseResult((await resultProof('substitute', player.id))!.payload);
     expect(payload.participants[0]).toMatchObject({ bot: true, identity: { kind: 'wallet' } });
     expect(winnerIds(payload)).toEqual([`eip155:84532:${wallet}`]);
   });
 
-  it('restricts proofs to recorded participants even after squad membership changes', () => {
-    const { proof } = finishedMatch(),
-      stranger = store.createProfile('Stranger', false);
-    expect(resultProof(proof.matchId, stranger.id)).toBeUndefined();
-    expect(resultProof('missing', stranger.id)).toBeUndefined();
+  it('restricts proofs to recorded participants even after squad membership changes', async () => {
+    const { proof } = await finishedMatch(),
+      stranger = await store.createProfile('Stranger', false);
+    expect(await resultProof(proof.matchId, stranger.id)).toBeUndefined();
+    expect(await resultProof('missing', stranger.id)).toBeUndefined();
   });
 
   it('passes frozen winner identities to the outbox and refuses corrupted result data', async () => {
-    const { player } = finishedMatch();
-    store.db.prepare('DELETE FROM wallets WHERE player_id=?').run(player.id);
-    store.db.prepare("UPDATE outbox SET status='pending'").run();
+    const { player } = await finishedMatch();
+    await store.db.prepare('DELETE FROM wallets WHERE player_id=?').run(player.id);
+    await store.db.prepare("UPDATE outbox SET status='pending'").run();
     const submit = vi.fn().mockResolvedValue({ status: 'confirmed' });
     await processOutbox({ submit });
     expect(submit.mock.calls[0][2]).toBe(JSON.stringify([`eip155:84532:${wallet}`]));
-    store.db.prepare("UPDATE results SET payload=json_set(payload,'$.scoreline[0]',999)").run();
-    store.db.prepare("UPDATE outbox SET status='pending'").run();
+    await store.db
+      .prepare("UPDATE results SET payload=json_set(payload,'$.scoreline[0]',999)")
+      .run();
+    await store.db.prepare("UPDATE outbox SET status='pending'").run();
     await processOutbox({ submit });
     expect(submit).toHaveBeenCalledTimes(1);
-    expect(store.db.prepare('SELECT status,error FROM outbox').get()).toMatchObject({
+    expect(await store.db.prepare('SELECT status,error FROM outbox').get()).toMatchObject({
       status: 'failed',
       error: 'Stored result hash mismatch',
     });
@@ -114,7 +116,7 @@ describe('immutable result identity', () => {
 
 describe('independent result checks', () => {
   it('verifies simulated integrity without contacting a blockchain', async () => {
-    const { proof } = finishedMatch(true),
+    const { proof } = await finishedMatch(true),
       read = vi.fn<AnchorReader>();
     expect(await verifyProof(proof, read)).toMatchObject({
       local: { status: 'match' },
@@ -124,7 +126,7 @@ describe('independent result checks', () => {
   });
 
   it('detects a changed score before attempting a blockchain read', async () => {
-    const proof = liveProof(),
+    const proof = await liveProof(),
       read = readerFor(proof),
       payload = JSON.parse(proof.payload);
     payload.scoreline[0] = 999;
@@ -136,7 +138,7 @@ describe('independent result checks', () => {
   });
 
   it('detects a changed wallet identity in the saved result', async () => {
-    const proof = liveProof(),
+    const proof = await liveProof(),
       payload = JSON.parse(proof.payload);
     payload.participants[0].identity = { kind: 'profile' };
     expect((await verifyProof({ ...proof, payload: JSON.stringify(payload) })).local.status).toBe(
@@ -145,7 +147,7 @@ describe('independent result checks', () => {
   });
 
   it('rejects invalid JSON, unsupported versions and an inconsistent account ID', async () => {
-    const proof = liveProof(),
+    const proof = await liveProof(),
       payload = JSON.parse(proof.payload);
     const invalidVersion = { ...payload, version: 99 };
     payload.participants[0].identity.accountId = 'eip155:1:wrong';
@@ -158,14 +160,14 @@ describe('independent result checks', () => {
   });
 
   it('rejects a result belonging to a different match even if its hash matches', async () => {
-    const proof = liveProof();
+    const proof = await liveProof();
     expect((await verifyProof({ ...proof, matchId: 'another-match' })).local.status).toBe(
       'mismatch',
     );
   });
 
   it('verifies both the hash and winners by reading the configured contract', async () => {
-    const proof = liveProof(),
+    const proof = await liveProof(),
       read = readerFor(proof),
       check = await verifyProof(proof, read);
     expect(read).toHaveBeenCalledWith(contract, matchKey(proof.matchId));
@@ -174,14 +176,14 @@ describe('independent result checks', () => {
   });
 
   it('does not trust the server confirmed label when the record is missing', async () => {
-    const proof = liveProof(),
+    const proof = await liveProof(),
       read = readerFor(proof);
     read.mockResolvedValue([proof.hash, winnerKey(parseResult(proof.payload)), 0n, wallet]);
     expect((await verifyProof(proof, read)).chain).toBe('not-found');
   });
 
   it('rejects either a result-hash mismatch or a winner mismatch on-chain', async () => {
-    const proof = liveProof(),
+    const proof = await liveProof(),
       read = readerFor(proof),
       wrong = keccak256(stringToHex('wrong'));
     read.mockResolvedValueOnce([wrong, winnerKey(parseResult(proof.payload)), 1700000000n, wallet]);
@@ -191,7 +193,7 @@ describe('independent result checks', () => {
   });
 
   it('reports a network failure separately from local integrity', async () => {
-    const proof = liveProof(),
+    const proof = await liveProof(),
       read = readerFor(proof);
     read.mockRejectedValue(Error('RPC unavailable'));
     expect(await verifyProof(proof, read)).toMatchObject({
@@ -205,7 +207,7 @@ describe('independent result checks', () => {
   });
 
   it('keeps demo results simulated even if their status claims confirmation', async () => {
-    const { proof } = finishedMatch(true),
+    const { proof } = await finishedMatch(true),
       read = vi.fn<AnchorReader>();
     expect(
       (
@@ -221,7 +223,7 @@ describe('independent result checks', () => {
   it.each([1, 2])(
     'supports version %i hashes and their historical winner digests',
     async (version) => {
-      const proof = liveProof(),
+      const proof = await liveProof(),
         payload = JSON.parse(proof.payload);
       payload.version = version;
       for (const p of payload.participants) {

@@ -2,7 +2,7 @@
 
 This walkthrough is for Sam, starting from the beginning. It describes the implementation on `Sam-dev` as of 29 October 2026. Local features, configured integrations and unfinished work are distinguished below.
 
-This is the feature snapshot based on `5645fcc`. Newer `main` commits add deployment and asynchronous database changes that still require integration. The [review handoff](SAM-REVIEW-HANDOFF.md) records those overlaps, the latest validation results, and the teammate checklist.
+This branch now integrates `main` through `addddb5`, including its deployment and asynchronous database changes. The [review handoff](SAM-REVIEW-HANDOFF.md) records those overlaps, the latest validation results, and the teammate checklist.
 
 ## The direct answer about your blockchain profile
 
@@ -34,16 +34,16 @@ An actual on-chain player registry is **not implemented**. We have not deployed 
 9. **Verify.** **Your legacy → Battle chronicles → Verify result** recomputes that fingerprint in the browser. For a real record with a configured contract, it also reads the contract and compares the result and winner digests. Simulated results explicitly show that there is no on-chain proof.
 10. **Add real blockchain writes later.** The trusted server will submit result digests to its deployed contract. The blockchain records what was submitted; the game server remains responsible for fair refereeing. Profile registration and automatic badge minting are separate implementation steps.
 
-The database is the game's notebook. Colyseus is the live gameplay connection. Socket.IO is now the live team-message connection. The blockchain is a separate public record for the selected identity/reward/result features; it is not used to send every movement or chat message.
+The database is the game's notebook: SQLite locally and Supabase Postgres in production. Colyseus is the live gameplay connection. Socket.IO is now the live team-message connection. The blockchain is a separate public record for the selected identity/reward/result features; it is not used to send every movement or chat message.
 
 ## Try the team room with a teammate
 
-1. Open the game and choose a nickname. You do not need a wallet, training or competitive qualification to chat.
+1. Open the game and choose a nickname. You do not need a wallet, training or competitive qualification to open your own team room. Inviting/joining other humans follows the existing reviewed-adult eligibility rules.
 2. Select **Team room** in the sidebar. The server creates or reopens your team.
 3. Share its six-character **Invite code**.
 4. The other player opens the game in another browser, a private window, or on another device with access to the same server. Use distinct game profiles; two ordinary tabs can share the same saved login.
 5. They open **Team room**, enter your code and choose **Join**.
-6. Both players see team chat, online names and the same messages. Messages are persisted; the last 100 are loaded when reconnecting.
+6. Both players see team chat, online names and the same messages. Messages are persisted in the configured SQLite/Postgres adapter; the last 100 are loaded when reconnecting.
 7. Navigate to **Battle arena** or **Your journey**. The chat connection stays mounted. Outside the team screen it appears as a collapsible panel, including during matches and fullscreen gameplay.
 8. While typing, gameplay keyboard/actions are suppressed. The live match continues. Click the arena to regain control.
 
@@ -115,3 +115,5 @@ First confirm two humans can join one team and text while a match is active. The
 Primary references: [Socket.IO rooms](https://socket.io/docs/v4/rooms/), [server initialization](https://socket.io/docs/v4/server-initialization/), [authentication middleware](https://socket.io/docs/v4/middlewares/). Earlier blockchain concepts are explained in [Lesson 1](LESSON-01-WALLET-IDENTITY.md) and [Lesson 2](LESSON-02-MATCH-PROOFS.md).
 
 Validation on 29 October 2026: **84 tests passed across 12 files**. TypeScript, lint, the final production build and frozen-lockfile validation passed. The seven chat cases use real Socket.IO clients and include simultaneous WebSocket/polling chat and Colyseus gameplay on the same port. Browser layout/typing acceptance and public deployment were not tested because no browser was connected.
+
+Latest integrated validation (29 October 2026): `Sam-dev` now includes main through `addddb5`. All **100 tests across 17 files** passed, including the new Postgres wallet/result/chat integration. TypeScript, lint, production build and frozen installation passed. The attempted browser smoke run could not launch because Chromium is not installed; visual/browser acceptance and public deployment/testnet verification remain pending. See the [current handoff](SAM-REVIEW-HANDOFF.md).

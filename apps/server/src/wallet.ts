@@ -27,8 +27,8 @@ export function checkWalletOrigin(origin?: string) {
 }
 
 // This verifies a database link; it does not register the profile on-chain.
-export function walletIdentity(playerId: string) {
-  const row = db.prepare('SELECT address FROM wallets WHERE player_id=?').get(playerId) as
+export async function walletIdentity(playerId: string) {
+  const row = (await db.prepare('SELECT address FROM wallets WHERE player_id=?').get(playerId)) as
     | { address: string }
     | undefined;
   return row
@@ -42,25 +42,25 @@ export function walletIdentity(playerId: string) {
     : { status: 'pending' as const, label: 'Wallet not connected' };
 }
 
-function checkBinding(playerId: string, address: string) {
-  const current = db.prepare('SELECT address FROM wallets WHERE player_id=?').get(playerId) as
-    | { address: string }
-    | undefined;
+async function checkBinding(playerId: string, address: string) {
+  const current = (await db
+    .prepare('SELECT address FROM wallets WHERE player_id=?')
+    .get(playerId)) as { address: string } | undefined;
   if (current && current.address !== address)
     throw new WalletLinkError(
       'This profile already has a wallet. Select your linked account.',
       409,
     );
-  const owner = db.prepare('SELECT player_id FROM wallets WHERE address=?').get(address) as
+  const owner = (await db.prepare('SELECT player_id FROM wallets WHERE address=?').get(address)) as
     | { player_id: string }
     | undefined;
   if (owner && owner.player_id !== playerId)
     throw new WalletLinkError('This wallet is already linked to another player profile.', 409);
 }
 
-export function issueWalletChallenge(playerId: string, address: Address) {
+export async function issueWalletChallenge(playerId: string, address: Address) {
   const normalized = getAddress(address).toLowerCase();
-  checkBinding(playerId, normalized);
+  await checkBinding(playerId, normalized);
   const issuedAt = new Date(),
     expirationTime = new Date(issuedAt.getTime() + 5 * 60 * 1000);
   const message = createSiweMessage({
@@ -76,18 +76,20 @@ export function issueWalletChallenge(playerId: string, address: Address) {
     expirationTime,
     requestId: playerId,
   });
-  db.prepare(
-    `INSERT INTO wallet_nonces VALUES (?,?,?) ON CONFLICT(player_id)
+  await db
+    .prepare(
+      `INSERT INTO wallet_nonces VALUES (?,?,?) ON CONFLICT(player_id)
      DO UPDATE SET nonce=excluded.nonce,expires=excluded.expires`,
-  ).run(playerId, message, expirationTime.getTime());
+    )
+    .run(playerId, message, expirationTime.getTime());
   return { message, expiresAt: expirationTime.toISOString(), chainId: walletChainId };
 }
 
 export async function bindWallet(playerId: string, address: Address, signature: Hex) {
   const normalized = getAddress(address).toLowerCase();
-  const row = db
+  const row = (await db
     .prepare('SELECT nonce,expires FROM wallet_nonces WHERE player_id=?')
-    .get(playerId) as { nonce: string; expires: number } | undefined;
+    .get(playerId)) as { nonce: string; expires: number } | undefined;
   if (!row || row.expires <= Date.now())
     throw new WalletLinkError('Request a fresh signing challenge');
   const message = parseSiweMessage(row.nonce);
@@ -100,7 +102,7 @@ export async function bindWallet(playerId: string, address: Address, signature: 
     message.chainId !== walletChainId ||
     message.version !== '1' ||
     message.requestId !== playerId ||
-    message.expirationTime?.getTime() !== row.expires
+    message.expirationTime?.getTime() !== Number(row.expires)
   )
     throw new WalletLinkError(
       'Challenge does not match this wallet and player. Request a fresh one.',
@@ -110,19 +112,18 @@ export async function bindWallet(playerId: string, address: Address, signature: 
 
   // Verification yields to other requests. Consume the exact, still-valid challenge
   // and save the binding in one transaction so concurrent signatures cannot replay it.
-  db.transaction(() => {
-    const consumed = db
+  await db.transaction(async () => {
+    const consumed = await db
       .prepare('DELETE FROM wallet_nonces WHERE player_id=? AND nonce=? AND expires>?')
       .run(playerId, row.nonce, Date.now());
     if (consumed.changes !== 1)
       throw new WalletLinkError(
         'Challenge expired or was already used or replaced. Request a fresh one.',
       );
-    checkBinding(playerId, normalized);
-    db.prepare('INSERT INTO wallets VALUES (?,?) ON CONFLICT(player_id) DO NOTHING').run(
-      playerId,
-      normalized,
-    );
-  }).immediate();
+    await checkBinding(playerId, normalized);
+    await db
+      .prepare('INSERT INTO wallets VALUES (?,?) ON CONFLICT(player_id) DO NOTHING')
+      .run(playerId, normalized);
+  })();
   return walletIdentity(playerId);
 }

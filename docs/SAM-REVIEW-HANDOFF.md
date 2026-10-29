@@ -2,19 +2,23 @@
 
 Prepared 29 October 2026 on `Sam-dev`. Review these additions separately from the teammate's existing campaign/combat implementation. Code comments explain the wallet transaction boundary, nonce consumption, shared socket transport, independent proof checks, and chat keyboard handling.
 
-## Review status: draft, integration required
+## Main integration and conflict resolution
 
-These changes start from `5645fcc` (2.5D animation). During handoff, `origin/main` had advanced to `addddb5` through four further commits, including Render hosting, avatar/age-review flows, and an asynchronous SQLite/Postgres database abstraction. Those newer changes have been fetched for comparison but are **not merged into this branch**. This preserves the tested feature work for review; it is not a claim that the branch is ready to deploy over current main.
+Latest fetched `origin/main` is `addddb5` (29 October 2026). Its Render hosting, asynchronous SQLite/Postgres database layer, avatars, age-review flow and result-save acknowledgments are now combined with Sam's six feature commits on `Sam-dev`.
 
-Before merging, reconcile these concrete overlaps:
+The merge produced ten conflicted files: `attestation.ts`, `hosted.ts`, `index.ts`, `main.tsx`, `vite.config.ts`, `DEPLOYMENT.md`, `package.json`, `pnpm-lock.yaml`, `http.test.ts`, and `network.test.ts`. Resolution preserves both feature sets and includes the necessary semantic integration:
 
-- Port wallet, result-proof, and chat database calls to the async database interface. Preserve atomic challenge consumption and wallet-link conflicts. The current wallet transaction uses SQLite's `.immediate()` interface.
-- Add a Postgres migration for `team_messages`, qualify it under `game_runtime`, and update the SQL adapter's table list. Replace the SQLite `json_each` membership lookup with a query supported by both adapters.
-- Combine `/api/me`, wallet/proof routes, shared socket transport, result identity snapshots, and the attestation worker with the newer server code. Retain the newer hosted/static-serving behavior.
-- Combine the chat/arena/profile UI and typing guards with the newer avatar, age-review, and input behavior. Preserve current-main eligibility rules for human play.
-- Reconcile dependency/lockfile and environment/documentation changes, then rerun both this feature suite and current main's Postgres, customization, review-storage, and browser tests.
+- Wallet challenge creation, binding and identity reads now await the shared database adapter. Binding uses its serialized transaction, including Postgres advisory locking, rather than SQLite-only `.immediate()`. Bigint expiry values are normalized before comparison.
+- Match identities are fully resolved before canonical serialization/hashing. Proof access and the attestation worker await their database operations; legacy hashes remain unchanged.
+- Chat uses async authentication/membership/history, a room work queue, transactional message deduplication and persisted spam limits. Postgres aliases preserve `playerId`; epoch values become numbers before sending to clients. Same-origin hosted chat is supported.
+- Migration `005_team_chat.sql` adds the private Postgres chat table/indexes, retry uniqueness and browser-role access restrictions. The SQL adapter qualifies the new table and membership queries use the correct JSON function for each database.
+- `/api/me` retains wallet/proof/team data plus the newer avatar/age fields. Colyseus retains its age-band filters. Render static hosting, cold-start handling, avatar rendering and committed-result acknowledgment remain.
+- The frontend retains both optional vision prebundling and the fixed local port. Combined npm startup and actionable development errors remain; a production same-origin failure does not tell hosted users to run a local command.
+- The pinned dependency graph retains all main entries plus Socket.IO. Chat tests now use synthetic approved-adult fixtures to respect existing invitation rules.
 
-## Six separate commits
+Before a production rollout, apply the pending `005_team_chat.sql` migration and configure `WALLET_ORIGIN` to the actual frontend origin. These integration changes do not deploy services, alter a hosted database, broadcast transactions or mint badges.
+
+## Six original feature commits (preserved)
 
 | Order         | Addition              | Review focus                                                                                                                                                 |
 | ------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -25,7 +29,7 @@ Before merging, reconcile these concrete overlaps:
 | 5 (`a3d9052`) | Local startup         | `npm run dev` starts both services, fixed frontend port, clearer connection errors and HTTP tests                                                            |
 | 6             | Documentation/handoff | Beginner walkthrough, setup/architecture updates, feature gaps, integration notes and teammate checklist                                                     |
 
-Commits build on each other in that order; they are separate review units, not six unrelated patches. The shared result/identity helpers are introduced with wallet identity and then used by match proofs.
+A subsequent merge commit integrates main and resolves the ten conflicts without squashing these six feature commits. The original commits build on each other in that order; they are separate review units, not six unrelated patches. The shared result/identity helpers are introduced with wallet identity and then used by match proofs.
 
 ## What is actually still missing
 
@@ -53,20 +57,31 @@ Wallet sign-in/recovery is also absent: linking a wallet does not recover a lost
 
 Sam's next focus is the Web3 identity/result/reward path and chat integration. Agree ownership of spectators, replays, tournaments and social features before extending them.
 
-## Validation and manual review
+## Current integrated validation
 
-The handoff full run of `npm test` completed with **84 passes and one failure out of 85 tests**. The failing `tests/network.test.ts` demo journey expected the player's squad (`0`) to win Banner Conquest, but the other squad (`1`) won at the conquest assertion. The cause is not established; do not treat this run as a clean full-suite pass. Wallet tests (12), proof tests (17), Socket.IO tests (7), local-contract tamper checks, and the other network/campaign checks passed.
+Validated on 29 October 2026 after combining main through `addddb5`:
 
-The focused rerun, `npm test -- tests/network.test.ts -t 'completes the demo journey'`, **passed** (one test; six skipped) in about 121 seconds without a gameplay change. This demonstrates inconsistent test behavior; the gameplay/controller timing and guaranteed-win expectation still need investigation.
+| Check                                | Result                                                                                                                                                                                                                                                                                            |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm test`                           | **100 tests passed across 17 files**, about 257 seconds; includes the demo journey, multiplayer/campaign/reconnect/persistence, wallet/proof/chat, age-review/storage and Postgres checks                                                                                                         |
+| Focused integration run              | **48 passed** across wallet, proofs, chat, Postgres and HTTP files                                                                                                                                                                                                                                |
+| New Postgres end-to-end check        | Passed: real migrations and runtime SQL/transactions, wallet signature/replay rejection, result identity snapshots, private chat, concurrent retry deduplication, reconnect history and browser-role table restrictions; only the database transport uses local PGlite instead of a hosted server |
+| TypeScript / lint / production build | All passed                                                                                                                                                                                                                                                                                        |
+| Frozen dependency installation       | Passed; all current-main lock entries retained plus the Socket.IO graph                                                                                                                                                                                                                           |
+| Local app and backend                | Frontend HTTP 200; direct and frontend-proxied API health both returned `ok: true`, SQLite, simulated blockchain                                                                                                                                                                                  |
+| Browser smoke attempt                | Two existing checks could not launch because the required Chromium executable is absent; browser behavior/visual acceptance remains unverified                                                                                                                                                    |
+| Public deployment/testnet            | Not performed; no hosted database was migrated and no chain transactions or badge mints were sent                                                                                                                                                                                                 |
 
-`npm run lint`, `npm run typecheck`, and the production build passed on this feature snapshot. The staged code for each feature commit was checked separately with TypeScript. Earlier work also passed a full 84-test suite before the additional HTTP regression test. These results do not validate the newer main integration.
+The earlier pre-merge demo test had failed once on its guaranteed squad-win expectation and passed on a focused rerun. The integrated full run above passed that test too; the earlier inconsistent gameplay/controller behavior is still useful context for the gameplay developer.
 
-No public-testnet transaction, browser-wallet extension interaction, public two-device acceptance, or visual browser review was completed in this session.
+The three slow npm artifacts were downloaded in ranges and each SHA-512 was checked against the pinned lockfile before caching with pnpm. The project lockfile retains registry resolutions, not local temporary artifact paths.
+
+## Manual review still needed
 
 Manual review on this branch:
 
-1. Run `npm run dev` and keep the terminal open. Open `http://localhost:5173` in a normal window and a private window with separate profiles.
-2. Open **Team room**, share/join its invite code, send messages both ways, navigate away/back and reconnect. Check history and typing during a live match.
+1. Run `npm run dev` and keep the terminal open. Open `http://localhost:5173`. Separate normal/private windows provide separate browser sessions, but nicknames alone do not satisfy main's reviewed-adult invitation rule.
+2. Open **Team room**, share/join its invite code with eligible reviewed-adult accounts, send messages both ways, navigate away/back and reconnect. A solo player can open their own team room without training or a wallet; joining other humans still follows main's eligibility rules. Check history and typing during a live match.
 3. Complete training and a match. Open **Your legacy → Battle chronicles → Verify result**. Local simulation must not claim an on-chain proof.
 4. Optionally link a browser wallet by signing its ownership message. Confirm that the UI calls the link off-chain and does not claim registration or wallet-based account recovery.
 5. After integrating main, repeat the flow on two devices using the deployed URL and the newer eligibility rules.

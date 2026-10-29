@@ -34,6 +34,7 @@ try {
       r.onMessage('identity', () => {});
       r.onMessage('waiting', () => {});
       r.onMessage('result', () => {});
+      r.onMessage('saving', () => {});
       r.onMessage('snapshot', (w: World) => {
         worlds[n] = w;
         snapshots++;

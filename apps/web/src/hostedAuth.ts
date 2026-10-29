@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { api, saveSession } from './store';
 const url = import.meta.env.VITE_SUPABASE_URL,
-  key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
 export const hostedAuth = url && key ? createClient(url, key) : null;
 export async function signInEmail(email: string) {
   if (!hostedAuth) throw Error('Hosted authentication is not configured');

@@ -3,7 +3,7 @@
 Assessment date: 28 October 2026. Branch: `Sam-dev`. Baseline commit: `f63f0d7`.
 The tables below describe the initial assessment. Implementation progress is recorded at the end of this document.
 
-Handoff update, 29 October 2026: the feature work is being split into six review commits on `Sam-dev`. Newly fetched `origin/main` is `addddb5`; its asynchronous database/deployment changes are not integrated into this feature snapshot. See [review handoff](SAM-REVIEW-HANDOFF.md) for current integration tasks, validation limitations and confirmed missing features; earlier assessments and test counts below are historical.
+Handoff update, 29 October 2026: the feature work is being split into six review commits on `Sam-dev`. Newly fetched `origin/main` is `addddb5`; its asynchronous database/deployment changes have since been integrated into `Sam-dev`. See [review handoff](SAM-REVIEW-HANDOFF.md) for current integration tasks, validation limitations and confirmed missing features; earlier assessments and test counts below are historical.
 
 Update, 29 October 2026: `Sam-dev` now includes `origin/main` commit `5645fcc` ("2.5D animation"). That update adds a fifteen-mission campaign, including riding and a six-pass mounted spear challenge, alongside new artwork and rendering. The initial gameplay-gap table below is historical; consult `docs/CAMPAIGN.md` for the updated game scope. The wallet work was preserved, with `/api/me` reconciled to return both campaign progress and wallet identity.
 

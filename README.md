@@ -6,7 +6,7 @@ The kingdom of Aksumara and its story are fictional. Artwork draws respectfully 
 
 ## Start locally
 
-For Sam's separate feature commits, current-main integration work, and remaining hackathon gaps, read the [review handoff](docs/SAM-REVIEW-HANDOFF.md). This feature branch is a draft review based on `5645fcc`; newer main database/deployment changes require integration before merging.
+For Sam's separate feature commits, current-main integration work, and remaining hackathon gaps, read the [review handoff](docs/SAM-REVIEW-HANDOFF.md). This feature branch integrates `main` through `addddb5`, retaining its database, hosting, avatar and age-review changes alongside Sam's additions.
 
 Requirements: Node.js 22.x (22.18 or newer within that major) and pnpm 11.
 
@@ -37,7 +37,7 @@ Choose **Play the Story Demo** for the condensed seven-mission journey. Normal c
 | Tab           | Battle contributions                                          |
 | Escape        | Release controls / settings overlay; the live match continues |
 
-Warrior selection is cosmetic. Duels and training use equal sword/shield rules. Squad and quest roles are assigned by the server. Matchmaking waits five seconds for humans, then uses labeled AI. To test a human duel, complete training in two independent browser sessions and enter the arena together. For squads, share the six-character invite code; connected members ready up together in the lobby.
+Warrior selection is cosmetic. Duels and training use equal sword/shield rules. Squad and quest roles are assigned by the server. Matchmaking waits five seconds for humans, then uses labeled AI. For human play, use two authenticated, manually reviewed adult accounts in the same age band, complete training, then enter the arena together. Unverified guests play solo with bots. For squads, share the six-character invite code; connected members ready up together in the lobby.
 
 ## Commands
 
@@ -57,9 +57,9 @@ Tests cover API failures, legacy SQLite records, projection, mounted steering/wi
 
 - **Real locally:** network rooms, authoritative combat, bots, progression, SQLite persistence, squad invites/readiness/chat, banner conquest, puzzle and boss encounters, canonical Keccak-256 result hashes, browser-wallet ownership signatures and off-chain achievements.
 - **Explicitly simulated by default:** blockchain anchoring and the demo fellowship approval. Demo records, leaderboards and achievements stay separate from normal records. Reset Demo creates a fresh demo identity.
-- **Implemented, requires external configuration:** Supabase email login, server-to-Supabase result synchronization, private gathering photo upload/approval/deletion, and Base Sepolia result submission. These require live-service acceptance testing with your project credentials.
+- **Implemented, requires external configuration:** Supabase email login, Supabase-authoritative persistence, reviewed-age matchmaking, editable avatars, private gathering photo upload/approval/deletion, and Base Sepolia result submission. These require live-service acceptance testing with your project credentials.
 - **Contract tested locally:** authorized match attestation, replay protection and ERC-1155 badge issuance. Gameplay badge inventory is currently off-chain; automatic minting and thirdweb embedded onboarding are not enabled.
-- **Prepared, not published:** Vercel/Railway deployment configuration, Supabase migration and Base Sepolia deployment script. No public deployment or testnet transaction was performed during implementation.
+- **Prepared, not published:** Vercel/Render deployment configuration, Supabase migration and Base Sepolia deployment script. No public deployment or testnet transaction was performed during implementation.
 
 Local guest IDs are not blockchain identities. The browser-wallet link proves possession through a single-use signed challenge. A result hash proves payload integrity; a simulated submission is not an on-chain proof. Explorer links are shown only for real wallet addresses or actual transactions.
 
@@ -71,14 +71,14 @@ New version 3 results snapshot participant names and wallet/profile/AI identitie
 
 ## Configuration and deployment
 
-See [`.env.example`](.env.example). The server reads root `.env`; Vite reads `apps/web/.env` or platform-provided build variables. Never place service-role keys or attestor keys in `VITE_*` variables. See [deployment instructions](docs/DEPLOYMENT.md) for Vercel, Railway, Supabase and Base Sepolia. No Neon or Cloudflare service is required.
+See [`.env.example`](.env.example). The server reads root `.env`; Vite reads `apps/web/.env` or platform-provided build variables. Never place service-role keys or attestor keys in `VITE_*` variables. See [deployment instructions](docs/DEPLOYMENT.md) for Vercel, free Render, free Supabase and Base Sepolia. No Neon or Cloudflare service is required.
 
-The server uses SQLite as the runtime authority and durable queue, including when Supabase mirroring is enabled. Use one backend instance and persistent storage. Do not deploy the Colyseus backend as a stateless frontend function.
+Local development uses SQLite. Production uses asynchronous Supabase Postgres transactions through its private pooler; free Render hosts one persistent Node process without depending on durable local files. Do not deploy the Colyseus backend as a stateless frontend function.
 
 ## Project map
 
 - `apps/web`: React overlays, Zustand state, Phaser battlefield, generated artwork.
-- `apps/server`: Colyseus rooms, guest/hosted identity, SQLite transactions, hosted storage, attestation adapters.
+- `apps/server`: Colyseus rooms, guest/hosted identity, SQLite/Supabase transactions, private age review, hosted storage, attestation adapters.
 - `packages/shared`: validated input types, simulation, AI and progression rules.
 - `packages/contracts`: Solidity attestation and achievement contract.
 - `supabase/migrations`: PostgreSQL tables, RLS, private storage and transactional result RPC.

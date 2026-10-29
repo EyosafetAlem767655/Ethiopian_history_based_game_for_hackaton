@@ -1,3 +1,4 @@
+import type { AvatarSpec } from './customization';
 import { z } from 'zod';
 import { PROTOCOL_VERSION, type Geometry } from './presentation';
 import type { CampaignState } from './campaign';
@@ -30,6 +31,7 @@ export function shuffledRoles(random: () => number = Math.random): Role[] {
   return roles;
 }
 export interface Fighter {
+  avatar?: AvatarSpec;
   mount?: { heading: number; speed: number; gait: number };
   kind?: 'warrior' | 'hyena' | 'caster' | 'warden' | 'civilian';
   honor?: number;

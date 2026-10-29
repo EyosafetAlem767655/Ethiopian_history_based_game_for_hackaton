@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, it } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdirSync } from 'node:fs';
+import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { io, type Socket } from 'socket.io-client';
 import { Client, type Room } from 'colyseus.js';
@@ -66,7 +67,29 @@ async function until(check: () => boolean) {
   }
   throw Error('Chat event did not arrive');
 }
-const player = (name: string) => api('/session', undefined, { name, demo: true });
+async function player(name: string) {
+  const session = await api('/session', undefined, { name, demo: true });
+  // Synthetic eligibility fixtures retain main's reviewed-adult invite rules.
+  const fixture = new Database(database);
+  try {
+    fixture.prepare('INSERT INTO hosted_identities(id) VALUES (?)').run(session.profile.id);
+    fixture
+      .prepare(
+        'INSERT INTO age_reviews(id,player_id,status,birth_date,created,expires) VALUES (?,?,?,?,?,?)',
+      )
+      .run(
+        randomUUID(),
+        session.profile.id,
+        'approved',
+        '2000-01-01',
+        Date.now(),
+        Date.now() + 86400000,
+      );
+  } finally {
+    fixture.close();
+  }
+  return session;
+}
 async function connect(
   p: any,
   squadId: string,

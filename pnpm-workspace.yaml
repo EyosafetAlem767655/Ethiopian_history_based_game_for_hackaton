@@ -8,3 +8,4 @@ allowBuilds:
   bufferutil: false
   msgpackr-extract: false
   utf-8-validate: false
+  tesseract.js: false

@@ -1,12 +1,12 @@
-import Database from 'better-sqlite3';
-import { dirname } from 'node:path';
+import type { AvatarSpec } from '../../../packages/shared/src/customization';
+import { db, persistence } from './database';
+export { db } from './database';
 import {
   freshCampaign,
   completeMission,
   missionEligibility,
   type CampaignProgress,
 } from '../../../packages/shared/src/missions';
-import { mkdirSync } from 'node:fs';
 import { randomUUID, createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
 import {
   canonical,
@@ -22,12 +22,7 @@ import {
   type Progress,
   type World,
 } from '../../../packages/shared/src/game';
-mkdirSync('data', { recursive: true });
-if (process.env.DB_PATH && process.env.DB_PATH !== ':memory:')
-  mkdirSync(dirname(process.env.DB_PATH), { recursive: true });
-export const db = new Database(process.env.DB_PATH ?? 'data/knights.sqlite');
-db.pragma('journal_mode = WAL');
-db.exec(`CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY,value TEXT NOT NULL);
+await db.exec(`CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY,name TEXT NOT NULL,demo INTEGER NOT NULL,hero INTEGER NOT NULL DEFAULT 0,progress TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS wallets(player_id TEXT PRIMARY KEY,address TEXT UNIQUE NOT NULL);
 CREATE TABLE IF NOT EXISTS wallet_nonces(player_id TEXT PRIMARY KEY,nonce TEXT NOT NULL,expires INTEGER NOT NULL);
@@ -37,12 +32,14 @@ CREATE TABLE IF NOT EXISTS badges (player_id TEXT NOT NULL,badge TEXT NOT NULL,m
 CREATE TABLE IF NOT EXISTS outbox (match_id TEXT PRIMARY KEY,status TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,tx TEXT,error TEXT);
 CREATE TABLE IF NOT EXISTS squads (id TEXT PRIMARY KEY,code TEXT UNIQUE NOT NULL,name TEXT NOT NULL,demo INTEGER NOT NULL,members TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS gatherings (id TEXT PRIMARY KEY,squad_id TEXT NOT NULL,approvals TEXT NOT NULL,simulated INTEGER NOT NULL,hash TEXT NOT NULL);`);
-db.exec(
+await db.exec(
   'CREATE TABLE IF NOT EXISTS campaign_progress(player_id TEXT PRIMARY KEY,data TEXT NOT NULL);',
 );
-export function campaignProgress(id: string): CampaignProgress {
-  const row = db.prepare('SELECT data FROM campaign_progress WHERE player_id=?').get(id) as
-    | { data: string }
+export async function campaignProgress(id: string) {
+  const row = (await db.prepare('SELECT data FROM campaign_progress WHERE player_id=?').get(id)) as
+    | {
+        data: string;
+      }
     | undefined;
   let value;
   try {
@@ -59,37 +56,49 @@ export function campaignProgress(id: string): CampaignProgress {
           (n: unknown) => Number.isInteger(n) && Number(n) >= 1 && Number(n) <= 15,
         )
       : [],
-    fellowship: !!value.fellowship || (profile(id)?.progress.stage ?? 0) >= 3,
+    fellowship: !!value.fellowship || ((await profile(id))?.progress.stage ?? 0) >= 3,
   };
 }
-export function saveCampaign(id: string, p: CampaignProgress) {
-  db.prepare(
-    'INSERT INTO campaign_progress VALUES (?,?) ON CONFLICT(player_id) DO UPDATE SET data=excluded.data',
-  ).run(id, JSON.stringify(p));
+export async function saveCampaign(id: string, p: CampaignProgress) {
+  await db
+    .prepare(
+      'INSERT INTO campaign_progress VALUES (?,?) ON CONFLICT(player_id) DO UPDATE SET data=excluded.data',
+    )
+    .run(id, JSON.stringify(p));
 }
-const squadColumns = db.prepare('PRAGMA table_info(squads)').all() as { name: string }[];
+const squadColumns =
+  persistence === 'sqlite'
+    ? ((await db.prepare('PRAGMA table_info(squads)').all()) as {
+        name: string;
+      }[])
+    : [{ name: 'rating' }];
 if (!squadColumns.some((c) => c.name === 'rating'))
-  db.exec(
+  await db.exec(
     'ALTER TABLE squads ADD COLUMN rating INTEGER NOT NULL DEFAULT 1000; ALTER TABLE squads ADD COLUMN wins INTEGER NOT NULL DEFAULT 0;',
   );
-let row = db.prepare('SELECT value FROM secrets WHERE id=?').get('session') as
-  | { value: string }
+let row = (await db.prepare('SELECT value FROM secrets WHERE id=?').get('session')) as
+  | {
+      value: string;
+    }
   | undefined;
-if (!row) {
+if (!row && persistence === 'sqlite') {
   row = { value: randomBytes(32).toString('hex') };
-  db.prepare('INSERT INTO secrets VALUES (?,?)').run('session', row.value);
+  await db.prepare('INSERT INTO secrets VALUES (?,?)').run('session', row.value);
 }
-const secret = process.env.SESSION_SECRET ?? row.value;
+const secret = process.env.SESSION_SECRET ?? row!.value;
 export interface Profile {
+  avatar?: AvatarSpec;
   id: string;
   name: string;
   demo: number;
   hero: number;
   progress: Progress;
 }
-export function profile(id: string): Profile | undefined {
-  const r = db.prepare('SELECT * FROM profiles WHERE id=?').get(id) as
-    | (Omit<Profile, 'progress'> & { progress: string })
+export async function profile(id: string) {
+  const r = (await db.prepare('SELECT * FROM profiles WHERE id=?').get(id)) as
+    | (Omit<Profile, 'progress'> & {
+        progress: string;
+      })
     | undefined;
   if (!r) return undefined;
   let saved;
@@ -100,22 +109,17 @@ export function profile(id: string): Profile | undefined {
   }
   return { ...r, progress: { ...freshProgress(), ...saved } };
 }
-export function saveProfile(p: Profile) {
-  db.prepare('UPDATE profiles SET hero=?,progress=? WHERE id=?').run(
-    p.hero,
-    JSON.stringify(p.progress),
-    p.id,
-  );
+export async function saveProfile(p: Profile) {
+  await db
+    .prepare('UPDATE profiles SET hero=?,progress=? WHERE id=?')
+    .run(p.hero, JSON.stringify(p.progress), p.id);
 }
-export function createProfile(name: string, demo: boolean) {
+export async function createProfile(name: string, demo: boolean) {
   const id = randomUUID();
-  db.prepare('INSERT INTO profiles(id,name,demo,progress) VALUES (?,?,?,?)').run(
-    id,
-    name,
-    Number(demo),
-    JSON.stringify(freshProgress()),
-  );
-  return profile(id)!;
+  await db
+    .prepare('INSERT INTO profiles(id,name,demo,progress) VALUES (?,?,?,?)')
+    .run(id, name, Number(demo), JSON.stringify(freshProgress()));
+  return (await profile(id))!;
 }
 export function token(p: Profile) {
   const body = Buffer.from(JSON.stringify({ id: p.id, exp: Date.now() + 7 * 86400000 })).toString(
@@ -123,8 +127,9 @@ export function token(p: Profile) {
   );
   return body + '.' + createHmac('sha256', secret).update(body).digest('base64url');
 }
-export function authenticate(t: unknown): Profile {
-  if (typeof t !== 'string') throw Error('Session required');
+export class SessionError extends Error {}
+export async function authenticate(t: unknown) {
+  if (typeof t !== 'string' || t.length > 2048) throw new SessionError('Session required');
   const [body, sig] = t.split('.');
   const expected = createHmac('sha256', secret)
     .update(body ?? '')
@@ -134,16 +139,23 @@ export function authenticate(t: unknown): Profile {
     sig.length !== expected.length ||
     !timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
   )
-    throw Error('Invalid session');
-  const data = JSON.parse(Buffer.from(body, 'base64url').toString());
-  const p = profile(data.id);
-  if (data.exp < Date.now() || !p) throw Error('Session expired');
+    throw new SessionError('Invalid session');
+  let data;
+  try {
+    data = JSON.parse(Buffer.from(body, 'base64url').toString());
+  } catch {
+    throw new SessionError('Invalid session');
+  }
+  if (typeof data.id !== 'string' || !Number.isFinite(data.exp))
+    throw new SessionError('Invalid session');
+  const p = await profile(data.id);
+  if (data.exp < Date.now() || !p) throw new SessionError('Session expired');
   return p;
 }
-function resultIdentity(id: string): ResultIdentity {
+async function resultIdentity(id: string): Promise<ResultIdentity> {
   // A disconnected player's AI substitute still belongs to the human profile.
-  if (!profile(id)) return { kind: 'bot' };
-  const wallet = db.prepare('SELECT address FROM wallets WHERE player_id=?').get(id) as
+  if (!(await profile(id))) return { kind: 'bot' };
+  const wallet = (await db.prepare('SELECT address FROM wallets WHERE player_id=?').get(id)) as
     | { address: string }
     | undefined;
   return wallet
@@ -155,11 +167,11 @@ function resultIdentity(id: string): ResultIdentity {
       }
     : { kind: 'profile' };
 }
-export const issueBadge = (id: string, badge: string, match: string) =>
-  db.prepare('INSERT OR IGNORE INTO badges VALUES (?,?,?)').run(id, badge, match);
+export const issueBadge = async (id: string, badge: string, match: string) =>
+  await db.prepare('INSERT OR IGNORE INTO badges VALUES (?,?,?)').run(id, badge, match);
 export function recordResult(id: string, w: World, started: string) {
-  return db.transaction(() => {
-    if (db.prepare('SELECT id FROM results WHERE id=?').get(id)) return false;
+  return db.transaction(async () => {
+    if (await db.prepare('SELECT id FROM results WHERE id=?').get(id)) return false;
     const payload = {
       version: 3,
       ...(w.campaign
@@ -180,17 +192,19 @@ export function recordResult(id: string, w: World, started: string) {
             ? 2
             : 1,
       demo: w.demo,
-      participants: w.players.map((p) => ({
-        id: p.id,
-        name: p.name,
-        identity: resultIdentity(p.id),
-        bot: p.bot,
-        team: p.team,
-        damage: p.damage,
-        kills: p.kills,
-        contribution: p.contribution,
-        ...(w.campaign ? { honor: p.honor ?? 0 } : {}),
-      })),
+      participants: await Promise.all(
+        w.players.map(async (p) => ({
+          id: p.id,
+          name: p.name,
+          identity: await resultIdentity(p.id),
+          bot: p.bot,
+          team: p.team,
+          damage: p.damage,
+          kills: p.kills,
+          contribution: p.contribution,
+          ...(w.campaign ? { honor: p.honor ?? 0 } : {}),
+        })),
+      ),
       winner: w.winner,
       scoreline: w.scores,
       startedAt: started,
@@ -201,28 +215,23 @@ export function recordResult(id: string, w: World, started: string) {
     };
     const serialized = canonical(payload),
       hash = digest(payload);
-    db.prepare('INSERT INTO results VALUES (?,?,?,?,?)').run(
-      id,
-      Number(w.demo),
-      serialized,
-      hash,
-      payload.endedAt,
-    );
-    db.prepare('INSERT INTO outbox(match_id,status) VALUES (?,?)').run(
-      id,
-      !w.demo && process.env.ALLOW_CHAIN_BROADCAST === 'true' ? 'pending' : 'simulated',
-    );
-    for (const f of w.players.filter((p) => profile(p.id))) {
-      const p = profile(f.id);
+    await db
+      .prepare('INSERT INTO results VALUES (?,?,?,?,?)')
+      .run(id, Number(w.demo), serialized, hash, payload.endedAt);
+    await db
+      .prepare('INSERT INTO outbox(match_id,status) VALUES (?,?)')
+      .run(id, !w.demo && process.env.ALLOW_CHAIN_BROADCAST === 'true' ? 'pending' : 'simulated');
+    for (const f of w.players) {
+      const p = await profile(f.id);
       if (!p) continue;
       if (w.campaign) {
         if (
           f.team === w.winner &&
-          !missionEligibility(campaignProgress(p.id), w.campaign.missionId, w.demo)
+          !missionEligibility(await campaignProgress(p.id), w.campaign.missionId, w.demo)
         ) {
-          const old = campaignProgress(p.id),
+          const old = await campaignProgress(p.id),
             first = !old.completed.includes(w.campaign.missionId);
-          saveCampaign(
+          await saveCampaign(
             p.id,
             completeMission(old, w.campaign.missionId, f.honor ?? 0, f.contribution),
           );
@@ -238,35 +247,37 @@ export function recordResult(id: string, w: World, started: string) {
           w.demo,
           f.contribution,
         );
-      saveProfile(p);
-      db.prepare('INSERT INTO participants VALUES (?,?)').run(id, p.id);
+      await saveProfile(p);
+      await db.prepare('INSERT INTO participants VALUES (?,?)').run(id, p.id);
       if (w.mode === 'tutorial') continue;
       if (f.team === w.winner) {
-        issueBadge(p.id, 'First Blood', id);
-        if (w.campaign?.missionId === 2) issueBadge(p.id, 'Royal Rider', id);
-        if (w.campaign?.missionId === 6) issueBadge(p.id, 'Four Banners Champion', id);
-        if (w.campaign?.missionId === 14) issueBadge(p.id, 'Guardian Slayer', id);
+        await issueBadge(p.id, 'First Blood', id);
+        if (w.campaign?.missionId === 2) await issueBadge(p.id, 'Royal Rider', id);
+        if (w.campaign?.missionId === 6) await issueBadge(p.id, 'Four Banners Champion', id);
+        if (w.campaign?.missionId === 14) await issueBadge(p.id, 'Guardian Slayer', id);
         if (w.campaign?.missionId === 15) {
-          issueBadge(p.id, 'Thronebreaker', id);
-          if (w.champion === p.id) issueBadge(p.id, 'Crown Champion', id);
+          await issueBadge(p.id, 'Thronebreaker', id);
+          if (w.champion === p.id) await issueBadge(p.id, 'Crown Champion', id);
         }
-        if (w.mode === 'duel' && p.progress.wins >= 3) issueBadge(p.id, 'Sword Master', id);
+        if (w.mode === 'duel' && p.progress.wins >= 3) await issueBadge(p.id, 'Sword Master', id);
         if (w.mode === 'squad' && f.damage >= 50) {
-          if (f.role === 'spear') issueBadge(p.id, 'Spear Master', id);
-          if (f.role === 'archer') issueBadge(p.id, 'Eagle Eye', id);
-          if (f.role === 'rider') issueBadge(p.id, 'Royal Rider', id);
+          if (f.role === 'spear') await issueBadge(p.id, 'Spear Master', id);
+          if (f.role === 'archer') await issueBadge(p.id, 'Eagle Eye', id);
+          if (f.role === 'rider') await issueBadge(p.id, 'Royal Rider', id);
         }
-        if (w.mode === 'squad') issueBadge(p.id, 'Four Banners Champion', id);
+        if (w.mode === 'squad') await issueBadge(p.id, 'Four Banners Champion', id);
         if (w.mode === 'quest') {
-          issueBadge(p.id, 'Guardian Slayer', id);
-          issueBadge(p.id, 'Thronebreaker', id);
-          if (w.champion === p.id) issueBadge(p.id, 'Crown Champion', id);
+          await issueBadge(p.id, 'Guardian Slayer', id);
+          await issueBadge(p.id, 'Thronebreaker', id);
+          if (w.champion === p.id) await issueBadge(p.id, 'Crown Champion', id);
         }
       }
-      if (p.progress.qualifying >= 10) issueBadge(p.id, 'Ten Victories', id);
+      if (p.progress.qualifying >= 10) await issueBadge(p.id, 'Ten Victories', id);
     }
     if (w.mode === 'squad') {
-      const squads = db.prepare('SELECT * FROM squads WHERE demo=?').all(Number(w.demo)) as any[];
+      const squads = (await db
+        .prepare('SELECT * FROM squads WHERE demo=?')
+        .all(Number(w.demo))) as any[];
       for (const squad of squads) {
         const members = JSON.parse(squad.members) as string[];
         const participant = w.players.find((p) => members.includes(p.id));
@@ -274,13 +285,15 @@ export function recordResult(id: string, w: World, started: string) {
         const win = participant.team === w.winner,
           rating = Math.max(0, squad.rating + (win ? 50 : -25)),
           wins = squad.wins + Number(win);
-        db.prepare('UPDATE squads SET rating=?,wins=? WHERE id=?').run(rating, wins, squad.id);
+        await db
+          .prepare('UPDATE squads SET rating=?,wins=? WHERE id=?')
+          .run(rating, wins, squad.id);
         for (const member of members) {
-          const p = profile(member);
+          const p = await profile(member);
           if (p) {
             p.progress.squadRating = rating;
             p.progress.squadWins = wins;
-            saveProfile(p);
+            await saveProfile(p);
           }
         }
       }
@@ -288,13 +301,13 @@ export function recordResult(id: string, w: World, started: string) {
     return true;
   })();
 }
-export function history(id: string) {
-  return db
+export async function history(id: string) {
+  return await db
     .prepare(
       `SELECT r.*,o.status,o.tx FROM results r JOIN participants p ON p.match_id=r.id JOIN outbox o ON o.match_id=r.id WHERE p.player_id=? ORDER BY r.created DESC LIMIT 30`,
     )
     .all(id);
 }
-export function badges(id: string) {
-  return db.prepare('SELECT badge,match_id FROM badges WHERE player_id=?').all(id);
+export async function badges(id: string) {
+  return await db.prepare('SELECT badge,match_id FROM badges WHERE player_id=?').all(id);
 }

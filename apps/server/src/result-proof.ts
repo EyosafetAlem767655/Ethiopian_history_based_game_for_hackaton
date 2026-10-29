@@ -2,9 +2,12 @@ import { getAddress, isAddress } from 'viem';
 import { db } from './store';
 import { resultChainId, type ResultProof } from '../../../packages/shared/src/results';
 
-export function resultProof(matchId: string, playerId: string): ResultProof | undefined {
+export async function resultProof(
+  matchId: string,
+  playerId: string,
+): Promise<ResultProof | undefined> {
   // Use the recorded participation, rather than current squad membership.
-  const row = db
+  const row = (await db
     .prepare(
       `
     SELECT r.id,r.payload,r.hash,r.demo,o.status,o.tx FROM results r
@@ -12,7 +15,7 @@ export function resultProof(matchId: string, playerId: string): ResultProof | un
     WHERE r.id=? AND p.player_id=?
   `,
     )
-    .get(matchId, playerId) as
+    .get(matchId, playerId)) as
     | {
         id: string;
         payload: string;

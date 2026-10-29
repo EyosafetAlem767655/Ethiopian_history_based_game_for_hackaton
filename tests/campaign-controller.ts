@@ -1,6 +1,6 @@
 import { direction } from './controller';
 import { MISSIONS } from '../packages/shared/src/missions';
-import {leadAim} from '../packages/shared/src/campaign';
+import { leadAim } from '../packages/shared/src/campaign';
 import { angleDiff, type World, type Input } from '../packages/shared/src/game';
 export function campaignControl(w: World, id: string, seq: number): Input {
   const p = w.players.find((p) => p.id === id)!,
@@ -32,8 +32,20 @@ export function campaignControl(w: World, id: string, seq: number): Input {
       interact = dist(target) < 78;
     } else combat({ x: w.bossX, y: w.bossY });
   } else if (m.kind === 'conquest') {
-    target = w.zones[1];
-    if (enemy && dist(enemy) < 200) combat(enemy);
+    // Capture the safest unowned objective instead of chasing a rival away from all zones.
+    const candidates = w.zones.filter((z) => z.owner !== p.team);
+    target = [...(candidates.length ? candidates : w.zones)].sort((a, b) => {
+      const cost = (z: typeof a) =>
+        dist(z) +
+        w.players.filter(
+          (q) => q.team !== p.team && q.hp > 0 && Math.hypot(q.x - z.x, q.y - z.y) < 130,
+        ).length *
+          120;
+      return cost(a) - cost(b);
+    })[0];
+    if (dist(target) < 35) target = { x: p.x, y: p.y };
+    attack = !!enemy && dist(enemy) < (p.role === 'archer' || p.mount ? 540 : 145);
+    block = !!enemy && enemy.attack > 0 && dist(enemy) < 130;
   } else if (m.kind === 'oath') {
     target = w.players.find((q) => q.id === 'trainee') ?? { x: 600, y: 380 };
     if (enemy) combat(enemy);
@@ -77,7 +89,7 @@ export function campaignControl(w: World, id: string, seq: number): Input {
   return {
     seq,
     ...movement,
-    aim:p.mount&&enemy?leadAim(p,enemy,w.wind?.y??0):aim,
+    aim: p.mount && enemy ? leadAim(p, enemy, w.wind?.y ?? 0) : aim,
     attack,
     interact,
     block,

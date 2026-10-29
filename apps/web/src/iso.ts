@@ -1,3 +1,5 @@
+import { joint, gaitFoot, defaultAvatar } from '../../../packages/shared/src/customization';
+import { avatarCanvas } from './avatar';
 import Phaser from 'phaser';
 import type { Room } from 'colyseus.js';
 import {
@@ -21,6 +23,9 @@ import { useUI } from './store';
 import { audio } from './audio';
 type Rig = {
   deadAt?: number;
+  phase: number;
+  lastX: number;
+  lastY: number;
   root: Phaser.GameObjects.Container;
   parts: Record<string, Phaser.GameObjects.Image>;
   shadow: Phaser.GameObjects.Ellipse;
@@ -58,7 +63,7 @@ export class IsoArena extends Phaser.Scene {
   }
   preload() {
     this.load.json('assetManifest', '/assets/manifest.json');
-    for (const name of ['rig', 'scenery', 'monsters', 'portraits', 'heads', 'bosses'])
+    for (const name of ['rig-v3', 'rig', 'scenery', 'monsters', 'portraits', 'heads', 'bosses'])
       this.load.image(name, '/assets/' + name + '.png');
   }
   create() {
@@ -66,6 +71,7 @@ export class IsoArena extends Phaser.Scene {
     this.ground = this.add.graphics().setDepth(-10000);
     this.fx = this.add.graphics().setDepth(20000);
     for (const [name, columns, rows] of [
+      ['rig-v3', 4, 4],
       ['rig', 4, 4],
       ['scenery', 2, 2],
       ['monsters', 2, 2],
@@ -423,7 +429,8 @@ export class IsoArena extends Phaser.Scene {
     this.ground.strokeEllipse(center.x, center.y, 228, 114);
   }
   part(index: number, width: number, height: number, x: number, y: number) {
-    const image = this.add.image(x, y, 'rig', 'cell' + index).setDisplaySize(width, height);
+    const image = this.add.image(x, y, 'rig-v3', 'cell' + index);
+    image.setScale(Math.min(width / image.frame.width, height / image.frame.height));
     return image;
   }
   createRig(p: Fighter) {
@@ -438,32 +445,57 @@ export class IsoArena extends Phaser.Scene {
       y: number,
       oy = 0.12,
     ) => {
-      const i = this.part(index, width, height, x, y).setOrigin(0.5, oy);
+      const i = name.startsWith('horse')
+        ? this.add
+            .image(x, y, 'rig', 'cell' + index)
+            .setDisplaySize(width, height)
+            .setOrigin(0.5, oy)
+        : this.part(index, width, height, x, y).setOrigin(0.5, oy);
       root.add(i);
       parts[name] = i;
       return i;
     };
-    add('backThigh', 4, 17, 28, 8, -33);
-    add('backShin', 5, 15, 29, 8, -13);
-    add('backBoot', 6, 18, 12, 9, 7, 0.5);
-    add('cape', 1, 38, 43, 0, -69);
-    add('frontThigh', 4, 18, 28, -9, -32);
-    add('frontShin', 5, 16, 29, -9, -12);
-    add('frontBoot', 6, 18, 12, -9, 8, 0.5);
-    add('torso', 1, 55, 45, 0, -67);
-    add('upperArm', 2, 17, 25, 18, -60);
-    add('forearm', 3, 15, 25, 21, -41);
+    add('cape', 9, 56, 57, 0, -76, 0.06);
+    add('backUpperArm', 1, 20, 27, -23, -66, 0.08);
+    add('backForearm', 2, 18, 27, -23, -44, 0.08);
+    add('backThigh', 4, 24, 31, 11, -34, 0.08);
+    add('backShin', 5, 21, 31, 11, -11, 0.08);
+    add('backBoot', 6, 27, 18, 11, 10, 0.5);
+    add('frontThigh', 4, 24, 31, -11, -34, 0.08);
+    add('frontShin', 5, 21, 31, -11, -11, 0.08);
+    add('frontBoot', 6, 27, 18, -11, 10, 0.5);
+    add('torso', [0, 11, 10, 14][p.hero] ?? 0, 65, 53, 0, -78, 0.08);
+    add('upperArm', 1, 24, 29, 23, -66, 0.08);
+    add('forearm', 2, 21, 28, 23, -44, 0.08);
     add(
       'weapon',
-      p.mount || p.role === 'spear' ? 9 : 8,
-      15,
-      p.mount || p.role === 'spear' ? 85 : 58,
-      25,
-      -12,
+      p.mount || p.role === 'spear' ? 8 : 7,
+      19,
+      p.mount || p.role === 'spear' ? 88 : 66,
+      23,
+      -22,
       0.88,
     );
-    add('shield', 7, 34, 34, -24, -44, 0.5);
-    const face = this.add.image(0, -80, 'heads', 'cell' + p.hero).setDisplaySize(30, 36);
+    add('shield', 3, 35, 43, -26, -40, 0.5);
+    const spec = p.avatar ?? {
+      ...defaultAvatar,
+      beard: p.hero === 1 ? 'none' : defaultAvatar.beard,
+    };
+    const heroHead = 'cell' + (p.hero ?? 0);
+    let face: Phaser.GameObjects.Image;
+    if (spec.face !== 'custom' && this.textures.get('heads').has(heroHead)) {
+      // Painted hero heads share one scale; the collar is pinned just over the torso top.
+      const frame = this.textures.getFrame('heads', heroHead),
+        height = frame.height * 0.105;
+      face = this.add
+        .image(0, -92, 'heads', heroHead)
+        .setDisplaySize(frame.width * 0.105, height)
+        .setOrigin(0.5, 1 - 16 / height);
+    } else {
+      const faceKey = 'avatar-' + JSON.stringify(spec);
+      if (!this.textures.exists(faceKey)) this.textures.addCanvas(faceKey, avatarCanvas(spec));
+      face = this.add.image(0, -92, faceKey).setDisplaySize(39, 44);
+    }
     root.add(face);
     parts.head = face;
     const shadow = this.add.ellipse(0, 0, 50, 23, 0x091a1c, 0.3);
@@ -487,20 +519,25 @@ export class IsoArena extends Phaser.Scene {
       add('horseHead', 11, 44, 48, 58, -52, 0.5);
       add('horseTail', 15, 35, 50, -48, -35, 0.2);
       for (const name of [
+        'cape',
+        'backUpperArm',
+        'backForearm',
         'backThigh',
         'backShin',
+        'backBoot',
         'frontThigh',
         'frontShin',
-        'backBoot',
         'frontBoot',
+        'torso',
+        'upperArm',
+        'forearm',
+        'weapon',
+        'shield',
+        'head',
       ])
-        parts[name].setVisible(false);
-      for (const name of ['torso', 'head', 'upperArm', 'forearm', 'shield', 'weapon', 'cape']) {
-        parts[name].y -= 35;
         root.bringToTop(parts[name]);
-      }
     }
-    return { root, parts, shadow, label, health };
+    return { root, parts, shadow, label, health, phase: 0, lastX: p.x, lastY: p.y };
   }
   drawActor(p: Fighter, x: number, y: number, time: number, w: World) {
     let rig = this.rigs.get(p.id);
@@ -520,8 +557,11 @@ export class IsoArena extends Phaser.Scene {
     const point = project(x, y),
       speed = Math.hypot(p.vx, p.vy),
       moving = speed > 12,
-      phase = time * 0.014 * Math.min(1.8, speed / 180),
+      phase = (rig.phase +=
+        (Math.min(35, Math.hypot(x - rig.lastX, y - rig.lastY)) * Math.PI) / 48),
       stride = moving ? Math.sin(phase) * 0.48 : 0;
+    rig.lastX = x;
+    rig.lastY = y;
     this.legPhase = p.id === this.mine ? stride : this.legPhase;
     const alpha = p.hp <= 0 ? 0.35 : p.invulnerable > 0 ? 0.65 : 1;
     rig.root.setPosition(point.x, point.y).setDepth(point.y).setAlpha(alpha);
@@ -532,38 +572,85 @@ export class IsoArena extends Phaser.Scene {
     );
     rig.root.setScale(facing.x < 0 ? -0.78 : 0.78, 0.78);
     const parts = rig.parts;
-    parts.frontThigh.setRotation(stride);
-    parts.backThigh.setRotation(-stride);
-    parts.frontShin
-      .setPosition(-9 - Math.sin(stride) * 23, -12 + Math.abs(stride) * 4)
-      .setRotation(-stride * 0.6);
-    parts.backShin
-      .setPosition(8 + Math.sin(stride) * 23, -13 + Math.abs(stride) * 4)
-      .setRotation(stride * 0.6);
-    parts.frontBoot.setPosition(-9 - Math.sin(stride) * 30, 8 + Math.sin(phase) * 3);
-    parts.backBoot.setPosition(8 + Math.sin(stride) * 30, 7 - Math.sin(phase) * 3);
-    const swing = p.attack > 0 ? Math.sin(((0.34 - p.attack) / 0.34) * Math.PI) : 0;
-    parts.upperArm.setRotation(swing * -0.9 + stride * 0.25);
-    const arm = parts.upperArm.rotation,
-      elbow = { x: 18 - Math.sin(arm) * 20, y: -60 + (p.mount ? -35 : 0) + Math.cos(arm) * 20 };
-    parts.forearm.setPosition(elbow.x, elbow.y).setRotation(arm - swing * 0.8);
-    parts.weapon.setPosition(
-      elbow.x - Math.sin(parts.forearm.rotation) * 20,
-      elbow.y + Math.cos(parts.forearm.rotation) * 20,
+    const offset = p.mount ? -35 : 0,
+      active = moving && p.hp > 0 && p.stun <= 0;
+    const swing =
+      p.attack > 0 ? Math.sin(Phaser.Math.Clamp((0.34 - p.attack) / 0.34, 0, 1) * Math.PI) : 0;
+    const limb = (
+      upper: string,
+      lower: string,
+      boot: string,
+      hip: { x: number; y: number },
+      foot: { x: number; y: number },
+      length = 26,
+    ) => {
+      const knee = joint(hip, foot, length, length, -1);
+      parts[upper]
+        .setPosition(hip.x, hip.y)
+        .setRotation(Math.atan2(knee.y - hip.y, knee.x - hip.x) - Math.PI / 2);
+      parts[lower]
+        .setPosition(knee.x, knee.y)
+        .setRotation(Math.atan2(foot.y - knee.y, foot.x - knee.x) - Math.PI / 2);
+      parts[boot].setPosition(foot.x + 3, foot.y).setRotation(active ? Math.sin(phase) * 0.1 : 0);
+    };
+    for (const [side, dx, shift] of [
+      ['front', -11, 0],
+      ['back', 11, Math.PI],
+    ] as const) {
+      const f = active ? gaitFoot(phase + shift, speed > 240 ? 20 : 16) : { x: 0, y: 0 };
+      limb(
+        side + 'Thigh',
+        side + 'Shin',
+        side + 'Boot',
+        { x: dx, y: -34 + offset },
+        { x: dx + (p.mount ? 7 : f.x), y: p.mount ? -27 : 10 + f.y },
+      );
+    }
+    const bob = active ? Math.cos(phase * 2) * 1.2 : Math.sin(time * 0.0018) * 0.4;
+    parts.torso.setPosition(0, -78 + offset + bob).setRotation(p.dodge > 0 ? -0.16 : 0);
+    parts.cape.setPosition(-5, -76 + offset).setRotation(active ? Math.sin(phase) * 0.08 : 0);
+    parts.head.setPosition(0, -92 + offset + bob);
+    const arm = (upper: string, lower: string, sx: number, rotation: number, bend: number) => {
+      const shoulder = { x: sx, y: -66 + offset + bob },
+        elbow = { x: sx - Math.sin(rotation) * 22, y: shoulder.y + Math.cos(rotation) * 22 };
+      const a = rotation + bend;
+      parts[upper].setPosition(shoulder.x, shoulder.y).setRotation(rotation);
+      parts[lower].setPosition(elbow.x, elbow.y).setRotation(a);
+      return { x: elbow.x - Math.sin(a) * 22, y: elbow.y + Math.cos(a) * 22 };
+    };
+    const walk = active && !p.mount ? Math.sin(phase) * 0.62 : 0;
+    const hand = arm(
+      'upperArm',
+      'forearm',
+      23,
+      p.mount ? -0.8 : swing ? -swing * 1.35 : walk,
+      p.mount ? -0.25 : -0.3 - swing * 0.5,
     );
-    parts.weapon.setRotation(swing * (p.role === 'spear' ? -0.35 : -1.9));
-    parts.shield.setRotation(p.block ? -0.4 : stride * 0.12);
-    parts.head.y =
-      (p.mount ? -115 : -80) +
-      (moving ? Math.abs(Math.sin(phase)) * 1.5 : Math.sin(time * 0.0018) * 0.7);
-    parts.torso.setTint(p.hero === 1 ? 0xe0f0cf : p.hero === 2 ? 0xc5d6a0 : 0xffffff);
+    const shieldHand = arm(
+      'backUpperArm',
+      'backForearm',
+      -23,
+      p.block ? 0.65 : p.mount ? -0.5 : -walk,
+      p.block ? -1.15 : -0.35,
+    );
+    parts.weapon
+      .setPosition(hand.x, hand.y)
+      .setRotation(p.role === 'spear' || p.mount ? -0.22 - swing * 0.75 : -0.25 - swing * 2.05);
+    parts.shield
+      .setPosition(shieldHand.x, shieldHand.y - 7)
+      .setRotation(p.block ? -0.25 : -walk * 0.15);
     if (p.mount) {
       for (let n = 0; n < 4; n++) {
-        const s =
-          Math.sin((p.mount.gait ?? phase) + (n % 2) * Math.PI + (n > 1 ? Math.PI : 0)) *
-          (moving ? 0.6 : 0);
-        parts['horseUpper' + n].setRotation(s);
-        parts['horseLower' + n].setRotation(-s * 0.5).x = (n < 2 ? -25 : 26) - Math.sin(s) * 24;
+        const hip = { x: n < 2 ? -29 : 28, y: -12 + (n % 2 ? -3 : 0) },
+          f = active ? gaitFoot(phase + (n === 0 || n === 3 ? 0 : Math.PI), 19) : { x: 0, y: 0 };
+        const foot = { x: hip.x + f.x, y: 31 + f.y },
+          knee = joint(hip, foot, 24, 24, n < 2 ? 1 : -1);
+        parts['horseUpper' + n]
+          .setPosition(hip.x, hip.y)
+          .setRotation(Math.atan2(knee.y - hip.y, knee.x - hip.x) - Math.PI / 2);
+        parts['horseLower' + n]
+          .setPosition(knee.x, knee.y)
+          .setRotation(Math.atan2(foot.y - knee.y, foot.x - knee.x) - Math.PI / 2);
       }
       parts.horseTail.setRotation(Math.sin(time * 0.005) * 0.15);
       if (
@@ -639,6 +726,40 @@ export class IsoArena extends Phaser.Scene {
           Math.atan2(a.y, a.x) + 1.1,
         );
         this.fx.strokePath();
+        const reduced = useUI.getState().reducedMotion,
+          angle = Math.atan2(a.y, a.x),
+          progress = Phaser.Math.Clamp((0.34 - p.attack) / 0.34, 0, 1);
+        for (const [width, color, alpha] of [
+          [17, 0xc84318, 0.3],
+          [10, 0xff7b22, 0.65],
+          [4, 0xffe5a0, 0.95],
+        ]) {
+          this.fx.lineStyle(width, color, reduced ? alpha * 0.5 : alpha);
+          this.fx.beginPath();
+          this.fx.arc(
+            point.x,
+            point.y - 32,
+            62,
+            angle - 0.8 + progress * 0.45,
+            angle + 0.3 + progress * 0.8,
+          );
+          this.fx.strokePath();
+        }
+        if (!reduced)
+          for (let n = 0; n < 7; n++) {
+            const t = (progress + n / 9) % 1,
+              b = angle - 0.8 + t * 1.8,
+              r = 64 + Math.sin(n * 8 + p.attackId) * 7;
+            this.fx.fillStyle(n % 2 ? 0xffa02d : 0xffe3a1, (1 - t) * 0.8);
+            this.fx.fillTriangle(
+              point.x + Math.cos(b) * r,
+              point.y - 32 + Math.sin(b) * r - t * 12,
+              point.x + Math.cos(b) * r - 3,
+              point.y - 32 + Math.sin(b) * r + 3,
+              point.x + Math.cos(b) * r + 2,
+              point.y - 32 + Math.sin(b) * r + 4,
+            );
+          }
       }
     }
   }

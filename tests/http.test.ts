@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiError, endpoints, readResponse, requestJSON } from '../apps/web/src/services/http';
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 it('reads JSON and preserves backend errors and diagnostic references', async () => {
   expect(
     await readResponse(
@@ -31,7 +34,11 @@ it.each([
 });
 it('rejects absent or insecure production endpoints and permits local development', () => {
   const production = { dev: false, hostname: 'game.vercel.app', protocol: 'https:' };
-  expect(() => endpoints(production)).toThrow('not configured');
+  expect(endpoints({ ...production, host: 'game.onrender.com' })).toEqual({
+    api: '',
+    ws: 'wss://game.onrender.com',
+  });
+  expect(() => endpoints({ ...production, protocol: 'http:' })).toThrow('HTTPS');
   expect(() => endpoints({ ...production, api: 'http://localhost:2567' })).toThrow('HTTPS');
   expect(() => endpoints({ ...production, api: 'https://game.up.railway.app', ws: '' })).toThrow(
     'VITE_WS_URL',
@@ -62,6 +69,29 @@ it('gives startup instructions for an unreachable local API only', async () => {
     message: expect.stringContaining('npm run dev'),
   });
   await expect(requestJSON('https://example.test/api/session')).rejects.toMatchObject({
+    code: 'NETWORK_ERROR',
+    message: expect.not.stringContaining('npm run dev'),
+  });
+});
+import { readFileSync } from 'node:fs';
+it('keeps vision models and APIs outside the Vercel SPA fallback', () => {
+  const config = JSON.parse(readFileSync('vercel.json', 'utf8'));
+  const fallback = new RegExp('^' + config.rewrites[0].source + '$');
+  for (const path of [
+    '/api/health',
+    '/vision/face_landmarker.task',
+    '/vision/wasm/vision_wasm_internal.wasm',
+    '/vision/ocr/eng.traineddata.gz',
+    '/assets/rig-v3.png',
+  ])
+    expect(fallback.test(path)).toBe(false);
+  expect(fallback.test('/journey')).toBe(true);
+});
+
+it('keeps production same-origin failures free of local startup instructions', async () => {
+  vi.stubEnv('DEV', false);
+  vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline')));
+  await expect(requestJSON('/api/session')).rejects.toMatchObject({
     code: 'NETWORK_ERROR',
     message: expect.not.stringContaining('npm run dev'),
   });

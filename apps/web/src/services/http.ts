@@ -15,20 +15,20 @@ export interface EndpointOptions {
   ws?: string;
   hostname: string;
   protocol: string;
+  /** location.host; used when the game server also serves this page (single Render service). */
+  host?: string;
 }
 export function endpoints(o: EndpointOptions) {
   const api = (o.api ?? '').trim().replace(/\/+$/, '');
-  if (!o.dev && !api)
-    throw new ApiError(
-      'The game server is not configured. Set VITE_API_URL and VITE_WS_URL in Vercel, then redeploy.',
-      0,
-      'SERVER_NOT_CONFIGURED',
-    );
+  const scheme = o.protocol === 'https:' ? 'wss' : 'ws';
+  // Without VITE_API_URL a production build talks to the origin that served it.
   const ws = (
     o.ws ??
     (api
       ? api.replace(/^http/, 'ws')
-      : `${o.protocol === 'https:' ? 'wss' : 'ws'}://${o.hostname}:2567`)
+      : o.dev
+        ? `${scheme}://${o.hostname}:2567`
+        : `${scheme}://${o.host ?? o.hostname}`)
   )
     .trim()
     .replace(/\/+$/, '');
@@ -81,7 +81,7 @@ export async function readResponse<T = any>(response: Response): Promise<T> {
   if (!/application\/(?:[\w.+-]*\+)?json/i.test(response.headers.get('content-type') ?? ''))
     throw new ApiError(
       response.ok
-        ? 'The server address returned a webpage instead of game data. Check VITE_API_URL and deploy the Railway backend.'
+        ? 'The server address returned a webpage instead of game data. Check VITE_API_URL and deploy the Render backend.'
         : `The game server is unavailable (HTTP ${response.status}). Please try again.`,
       response.status,
       'INVALID_RESPONSE',
@@ -121,7 +121,7 @@ export async function requestJSON<T = any>(
     throw new ApiError(
       controller.signal.aborted
         ? 'The game server took too long to respond. Please retry.'
-        : /^\/api(?:\/|$)/.test(url)
+        : import.meta.env.DEV && /^\/api(?:\/|$)/.test(url)
           ? 'The local game server is not reachable. Run npm run dev in the project folder, keep that terminal open, then refresh this page.'
           : 'Cannot reach the game server. Check your connection and backend address.',
       0,

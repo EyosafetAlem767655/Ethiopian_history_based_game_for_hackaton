@@ -1,3 +1,5 @@
+import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import { it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
@@ -6,6 +8,7 @@ import { control } from './controller';
 import type { World, Mode } from '../packages/shared/src/game';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { parseResult, verifyPayload } from '../packages/shared/src/results';
+const fixturePath = 'output/tests/network-' + randomUUID() + '.sqlite';
 const base = 'http://localhost:2568';
 let process: ChildProcess;
 async function request(path: string, session: any, body?: unknown) {
@@ -27,7 +30,7 @@ beforeAll(async () => {
     env: {
       ...globalThis.process.env,
       PORT: '2568',
-      DB_PATH: ':memory:',
+      DB_PATH: fixturePath,
       ALLOW_CHAIN_BROADCAST: 'false',
     },
     stdio: 'pipe',
@@ -48,7 +51,17 @@ afterAll(() => {
   process?.kill();
 });
 async function session(name: string) {
-  return request('/session', null, { name, demo: true });
+  const s = await request('/session', null, { name, demo: true });
+  // Synthetic review fixtures: no government documents or real Supabase authentication.
+  const fixture = new Database(fixturePath);
+  fixture.prepare('INSERT INTO hosted_identities(id) VALUES (?)').run(s.profile.id);
+  fixture
+    .prepare(
+      'INSERT INTO age_reviews(id,player_id,status,birth_date,created,expires) VALUES (?,?,?,?,?,?)',
+    )
+    .run(randomUUID(), s.profile.id, 'approved', '2003-05-12', Date.now(), Date.now() + 86400000);
+  fixture.close();
+  return s;
 }
 it('verifies wallet ownership once and rejects simulated gathering for normal guests', async () => {
   const s = await session('Wallet Tester'),
@@ -118,6 +131,7 @@ function play(r: Room, id: string, drive = true) {
   r.onMessage('waiting', () => {});
   r.onMessage('chat', () => {});
   r.onMessage('result', () => {});
+  r.onMessage('saving', () => {});
   r.onMessage('snapshot', (s: World) => {
     w = s;
     if (s.finished) resolve(s);
@@ -132,6 +146,7 @@ async function training(s: any) {
       mode: 'tutorial',
       demo: true,
       protocol: 2,
+      ageBand: '18–24',
       token: s.token,
     }),
     p = play(r, s.profile.id);
@@ -151,6 +166,7 @@ it('authenticates two clients, exchanges attacks, records one winner and rejects
       mode: 'quest',
       demo: true,
       protocol: 2,
+      ageBand: '18–24',
       token: a.token,
     }),
   ).rejects.toThrow();
@@ -160,11 +176,18 @@ it('authenticates two clients, exchanges attacks, records one winner and rejects
       mode: 'duel',
       demo: true,
       protocol: 2,
+      ageBand: '18–24',
       token: a.token,
       squadId: '',
     }),
     p1 = play(r1, a.profile.id),
-    r2 = await c.joinById(r1.roomId, { mode: 'duel', demo: true, protocol: 2, token: b.token }),
+    r2 = await c.joinById(r1.roomId, {
+      mode: 'duel',
+      demo: true,
+      protocol: 2,
+      ageBand: '18–24',
+      token: b.token,
+    }),
     p2 = play(r2, b.profile.id);
   try {
     const result = await p1.done;
@@ -198,7 +221,13 @@ it('authenticates two clients, exchanges attacks, records one winner and rejects
 it('reconnects a dropped authenticated participant into the same live room', async () => {
   const s = await session('Reconnect Knight'),
     c = new Client(base.replace('http', 'ws')),
-    r = await c.create('battle', { mode: 'tutorial', demo: true, protocol: 2, token: s.token });
+    r = await c.create('battle', {
+      mode: 'tutorial',
+      demo: true,
+      protocol: 2,
+      ageBand: '18–24',
+      token: s.token,
+    });
   const p = play(r, s.profile.id, false);
   await new Promise((resolve) => setTimeout(resolve, 500));
   const before = p.state()!;
@@ -225,8 +254,18 @@ it('shares invite-code lobbies, validates chat, and waits for all connected read
   const joined = await request('/squad', b, { code: squad.code });
   expect(joined.id).toBe(squad.id);
   const c = new Client(base.replace('http', 'ws')),
-    r1 = await c.joinOrCreate('squad-lobby', { squadId: squad.id, protocol: 2, token: a.token }),
-    r2 = await c.joinOrCreate('squad-lobby', { squadId: squad.id, protocol: 2, token: b.token });
+    r1 = await c.joinOrCreate('squad-lobby', {
+      squadId: squad.id,
+      protocol: 2,
+      ageBand: '18–24',
+      token: a.token,
+    }),
+    r2 = await c.joinOrCreate('squad-lobby', {
+      squadId: squad.id,
+      protocol: 2,
+      ageBand: '18–24',
+      token: b.token,
+    });
   let starts = 0;
   const chat: any[] = [];
   for (const r of [r1, r2]) {
@@ -254,7 +293,13 @@ it('shares invite-code lobbies, validates chat, and waits for all connected read
 it('restores the completed result when reconnecting during the result-screen grace period', async () => {
   const s = await session('Result Reconnect'),
     c = new Client(base.replace('http', 'ws')),
-    r = await c.create('battle', { mode: 'tutorial', demo: true, protocol: 2, token: s.token }),
+    r = await c.create('battle', {
+      mode: 'tutorial',
+      demo: true,
+      protocol: 2,
+      ageBand: '18–24',
+      token: s.token,
+    }),
     p = play(r, s.profile.id);
   await p.done;
   p.stop();
@@ -287,6 +332,7 @@ it('completes the demo journey through real simulated inputs and isolated reward
         mode,
         demo: true,
         protocol: 2,
+        ageBand: '18–24',
         token: s.token,
         squadId: squad?.id ?? '',
       }),

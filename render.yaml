@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: kibre-gugs-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: PERSISTENCE
+        value: supabase
+      # At least 32 characters; keep it stable or every issued session is invalidated.
+      - key: SESSION_SECRET
+        sync: false
+      # Supabase transaction pooler URL (port 6543).
+      - key: SUPABASE_DB_URL
+        sync: false
+      # Supabase database CA certificate (PEM, from Project Settings > Database > SSL).
+      - key: SUPABASE_DB_CA
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      # Set one of these two.
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      # This service also serves the web app, so the browser API is same-origin and
+      # CORS_ORIGINS is only needed if a separate frontend (e.g. Vercel) calls it.
+      # Public Supabase values baked into the web build (frontend-safe; never the service key).
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      # Leave unset until the age-cleanup schedule is verified (see docs/DEPLOYMENT.md).
+      - key: AGE_REVIEWER_IDS
+        sync: false
+      - key: ENABLE_DEMO
+        value: 'true'
+      - key: ALLOW_CHAIN_BROADCAST
+        value: 'false'

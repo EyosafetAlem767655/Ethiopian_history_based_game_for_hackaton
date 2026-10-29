@@ -22,7 +22,10 @@ export interface AttestationAdapter {
     matchId: string,
     resultHash: `0x${string}`,
     winner: string,
-  ): Promise<{ status: 'confirmed' | 'simulated'; tx?: string }>;
+  ): Promise<{
+    status: 'confirmed' | 'simulated';
+    tx?: string;
+  }>;
 }
 export class SimulatedAttestation implements AttestationAdapter {
   async submit() {
@@ -66,7 +69,7 @@ export class BaseAttestation implements AttestationAdapter {
       functionName: 'attest',
       args: [key, hash, winnerHash],
     });
-    db.prepare('UPDATE outbox SET tx=? WHERE match_id=?').run(tx, id);
+    await db.prepare('UPDATE outbox SET tx=? WHERE match_id=?').run(tx, id);
     const receipt = await client.waitForTransactionReceipt({ hash: tx });
     if (receipt.status !== 'success') throw Error('Transaction reverted');
     return { status: 'confirmed' as const, tx };
@@ -77,21 +80,22 @@ export async function processOutbox(adapter: AttestationAdapter) {
   if (running) return;
   running = true;
   try {
-    const rows = db
+    const rows = (await db
       .prepare(
         `SELECT o.*,r.hash,r.payload,r.demo FROM outbox o JOIN results r ON r.id=o.match_id WHERE o.status IN ('pending','failed') AND o.attempts<5`,
       )
-      .all() as any[];
+      .all()) as any[];
     for (const row of rows) {
       if (row.demo) {
-        db.prepare('UPDATE outbox SET status=? WHERE match_id=?').run('simulated', row.match_id);
+        await db
+          .prepare('UPDATE outbox SET status=? WHERE match_id=?')
+          .run('simulated', row.match_id);
         continue;
       }
       try {
-        db.prepare('UPDATE outbox SET attempts=attempts+1,status=? WHERE match_id=?').run(
-          'pending',
-          row.match_id,
-        );
+        await db
+          .prepare('UPDATE outbox SET attempts=attempts+1,status=? WHERE match_id=?')
+          .run('pending', row.match_id);
         const payload = parseResult(row.payload);
         if (payload.matchId !== row.match_id || digest(payload) !== row.hash)
           throw Error('Stored result hash mismatch');
@@ -100,17 +104,13 @@ export async function processOutbox(adapter: AttestationAdapter) {
           row.hash,
           JSON.stringify(winnerIds(payload)),
         );
-        db.prepare('UPDATE outbox SET status=?,tx=COALESCE(?,tx),error=NULL WHERE match_id=?').run(
-          out.status,
-          out.tx ?? null,
-          row.match_id,
-        );
+        await db
+          .prepare('UPDATE outbox SET status=?,tx=COALESCE(?,tx),error=NULL WHERE match_id=?')
+          .run(out.status, out.tx ?? null, row.match_id);
       } catch (e) {
-        db.prepare('UPDATE outbox SET status=?,error=? WHERE match_id=?').run(
-          'failed',
-          (e as Error).message,
-          row.match_id,
-        );
+        await db
+          .prepare('UPDATE outbox SET status=?,error=? WHERE match_id=?')
+          .run('failed', (e as Error).message, row.match_id);
       }
     }
   } finally {
