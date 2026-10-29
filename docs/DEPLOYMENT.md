@@ -1,5 +1,7 @@
 # Deploy ክብረ ጉግስ — Kibre Gugs
 
+Team chat uses Socket.IO on the same backend origin and port as Colyseus. Route `/socket.io/` HTTP polling and WebSocket upgrades to the backend, and include the frontend origin in `CORS_ORIGINS`. No separate chat host or key is needed. Keep one persistent backend instance; chat history lives in the same SQLite volume. Verify both gameplay and team chat after deployment, including reconnection and a second device.
+
 Keep your existing Vercel and Supabase projects. Add one Railway service for HTTP and Colyseus. SQLite on its volume remains the runtime authority. Supabase provides optional authenticated accounts, private gathering images, and queued hosted record mirrors. Do not delete existing data or rerun migration 001.
 
 ## 1. Back up before upgrading

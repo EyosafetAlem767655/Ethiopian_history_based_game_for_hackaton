@@ -45,6 +45,7 @@ export class IsoArena extends Phaser.Scene {
   lastSend = 0;
   queued = { attack: false, dodge: false, ability: false, interact: false };
   paused = false;
+  typing = false;
   mapKey = '';
   boss?: Phaser.GameObjects.Image;
   zoomLevel = 1.45;
@@ -104,6 +105,27 @@ export class IsoArena extends Phaser.Scene {
       'W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,Q,E,ESC,TAB,F,PLUS,MINUS',
     ) as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.addCapture(['SPACE', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'TAB']);
+    const focus = (target: EventTarget | null) => {
+      this.typing =
+        target instanceof Element &&
+        !!target.closest('input,textarea,select,[contenteditable="true"],[data-chat-controls]');
+      this.input.keyboard!.enabled = !this.typing;
+      // Phaser captures keys globally; release them so chat receives letters and spaces.
+      if (this.typing) this.input.keyboard!.disableGlobalCapture();
+      else this.input.keyboard!.enableGlobalCapture();
+      this.input.keyboard!.resetKeys();
+      this.queued = { attack: false, dodge: false, ability: false, interact: false };
+      window.dispatchEvent(new CustomEvent('scoreboard', { detail: false }));
+    };
+    const focusIn = (event: FocusEvent) => focus(event.target);
+    const focusOut = (event: FocusEvent) => focus(event.relatedTarget);
+    document.addEventListener('focusin', focusIn);
+    document.addEventListener('focusout', focusOut);
+    focus(document.activeElement);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      document.removeEventListener('focusin', focusIn);
+      document.removeEventListener('focusout', focusOut);
+    });
     this.input.mouse!.disableContextMenu();
     this.cameras.main.setZoom(this.zoomLevel);
     this.keys.SPACE.on('down', () => (this.queued.dodge = true));
@@ -174,16 +196,17 @@ export class IsoArena extends Phaser.Scene {
         Number(this.keys.S.isDown || this.keys.DOWN.isDown) -
           Number(this.keys.W.isDown || this.keys.UP.isDown),
       );
+      const blocked = this.paused || this.typing;
       const i: Input = {
         seq: this.seq++,
-        x: this.paused ? 0 : direction.x,
-        y: this.paused ? 0 : direction.y,
+        x: blocked ? 0 : direction.x,
+        y: blocked ? 0 : direction.y,
         aim: Math.atan2(aim.y - p.y, aim.x - p.x),
-        attack: !this.paused && (this.input.activePointer.leftButtonDown() || this.queued.attack),
-        block: !this.paused && this.input.activePointer.rightButtonDown(),
-        dodge: !this.paused && (this.keys.SPACE.isDown || this.queued.dodge),
-        ability: !this.paused && (this.keys.Q.isDown || this.queued.ability),
-        interact: !this.paused && (this.keys.E.isDown || this.queued.interact),
+        attack: !blocked && (this.input.activePointer.leftButtonDown() || this.queued.attack),
+        block: !blocked && this.input.activePointer.rightButtonDown(),
+        dodge: !blocked && (this.keys.SPACE.isDown || this.queued.dodge),
+        ability: !blocked && (this.keys.Q.isDown || this.queued.ability),
+        interact: !blocked && (this.keys.E.isDown || this.queued.interact),
       };
       if (
         time - this.lastSend >= 1000 / 30 &&

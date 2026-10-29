@@ -4,7 +4,8 @@ import cors from 'cors';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { Server } from '@colyseus/core';
-import { WebSocketTransport } from '@colyseus/ws-transport';
+import { SharedGameTransport } from './transport';
+import { currentSquad, registerTeamChat } from './chat';
 import { z } from 'zod';
 import type { Address, Hex } from 'viem';
 import {
@@ -128,6 +129,7 @@ app.get('/api/me', (_q, r) => {
     history: history(p.id),
     wallet: walletIdentity(p.id),
     campaign: campaignProgress(p.id),
+    squad: currentSquad(p.id, p.demo),
   });
 });
 app.get('/api/results/:id/proof', (q, r) => {
@@ -303,7 +305,8 @@ app.use((err: Error, _q: express.Request, r: express.Response, _n: express.NextF
   });
 });
 const http = createServer(app);
-const server = new Server({ transport: new WebSocketTransport({ server: http }) });
+const server = new Server({ transport: new SharedGameTransport(http) });
+registerTeamChat(http);
 server.define('battle', BattleRoom).filterBy(['mode', 'demo', 'squadId']);
 server.define('conquest', BattleRoom, { mode: 'squad' }).filterBy(['demo']);
 server.define('quest', BattleRoom, { mode: 'quest' }).filterBy(['demo', 'squadId']);

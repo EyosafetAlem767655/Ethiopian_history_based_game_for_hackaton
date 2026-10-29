@@ -6,6 +6,7 @@ import { useUI, api, saveSession, API, connection } from './store';
 import { requestJSON } from './services/http';
 import { CampaignScreen } from './CampaignScreen';
 import { MatchRecord } from './MatchRecord';
+import { TeamChat } from './TeamChat';
 import { ScrollGuide } from './ScrollGuide';
 import { audio } from './audio';
 import { MISSIONS } from '../../../packages/shared/src/missions';
@@ -83,6 +84,10 @@ function App() {
       }
     }
   }
+  useEffect(() => {
+    if (!session) setSquad(null);
+    else if (me?.profile?.id === session.profile.id) setSquad(me.squad ?? null);
+  }, [me, session?.profile.id]);
   useEffect(() => {
     void refresh();
     const pass = new URLSearchParams(location.search).get('pass');
@@ -262,11 +267,17 @@ function App() {
     ['home', '⌂', 'The kingdom'],
     ['journey', '◇', 'Your journey'],
     ['arena', '⚔', 'Royal arena'],
+    ['squad', '☏', 'Team room'],
     ['heroes', '♜', 'Warriors'],
     ['leaderboard', '♛', 'Hall of legends'],
     ['profile', '◈', 'Your legacy'],
   ];
   function navigate(id: string) {
+    if (id === 'squad') {
+      if (session) void getSquad();
+      else setPage('identity');
+      return;
+    }
     if (id === 'leaderboard' && session)
       void action(async () => {
         setLeaders(await api('/leaderboard'));
@@ -639,19 +650,15 @@ function App() {
                       ENTER ARENA ⚔
                     </button>
                   </article>
-                  <article className={(progress?.stage ?? 1) < 2 ? 'locked' : ''}>
+                  <article>
                     <div className="step-number">02</div>
                     <div>
                       <span className="eyebrow">{progress?.squadRating ?? 1000} SQUAD RATING</span>
                       <h2>The Four Banners</h2>
                       <p>Gather your squad. Capture the banners. Earn your Royal Lunch Pass.</p>
                     </div>
-                    <button
-                      className="outline-btn"
-                      disabled={busy || (progress?.stage ?? 1) < 2}
-                      onClick={() => getSquad()}
-                    >
-                      FORM A SQUAD →
+                    <button className="outline-btn" disabled={busy} onClick={() => getSquad()}>
+                      OPEN TEAM ROOM →
                     </button>
                   </article>
                   <article className={(progress?.stage ?? 1) < 3 ? 'locked' : ''}>
@@ -678,13 +685,23 @@ function App() {
           <section className="content-page">
             <div className="section-title">
               <div>
-                <span className="eyebrow">FOUR WARRIORS. ONE PURPOSE.</span>
+                <span className="eyebrow">TEAM ROOM · CHAT, INVITE, READY UP</span>
                 <h1>{squad?.name ?? 'The Four Banners'}</h1>
               </div>
               <span className="invite-code">
                 INVITE CODE <b>{squad?.code}</b>
               </span>
             </div>
+            <div className="team-room-guide">
+              <p>
+                Share the six-character code with a teammate. They can open Team room and join using
+                it. Chat is available immediately; arena qualification is separate.
+              </p>
+              <button className="outline-btn" onClick={() => setPage('arena')}>
+                GO TO BATTLE ARENA →
+              </button>
+            </div>
+            <div id="team-chat-slot" />
             <div className="squad-slots">
               {[0, 1, 2, 3].map((n) => (
                 <div className="squad-slot" key={n}>
@@ -716,13 +733,20 @@ function App() {
               </div>
               <button
                 className="gold-btn"
-                disabled={busy}
+                disabled={busy || (progress?.stage ?? 1) < 2}
                 onClick={() => window.dispatchEvent(new Event('knights-ready'))}
               >
                 READY · BANNER CONQUEST <span>⚑</span>
               </button>
             </div>
-            <SquadChat squad={squad} onStart={() => start('squad')} />
+            <SquadReadiness squad={squad} onStart={() => start('squad')} />
+            {(progress?.stage ?? 1) < 2 && (
+              <p className="subtle">
+                Team chat is open. To unlock 4v4 battles, complete training and earn{' '}
+                {isDemo ? 'one qualifying duel win' : 'ten qualifying duel wins'}. Your team members
+                must each qualify.
+              </p>
+            )}
             <div className="lunch-pass">
               <div>
                 <span className="eyebrow">THE ROYAL GATHERING</span>
@@ -1209,6 +1233,19 @@ function App() {
           </div>
         )}
       </main>
+      {session && squad && (
+        <TeamChat
+          key={session.profile.id + ':' + squad.id}
+          squad={squad}
+          page={page}
+          onRoster={(members) =>
+            setSquad((current: any) =>
+              current?.id === squad.id ? { ...current, members } : current,
+            )
+          }
+          onMembershipChanged={() => void refresh()}
+        />
+      )}
       {busy && (
         <div className="busy-indicator">
           CONNECTING TO AKSUMARA <span>◆</span>
@@ -1229,10 +1266,8 @@ function Gate({ onPlay }: { onPlay: () => void }) {
     </div>
   );
 }
-function SquadChat({ squad, onStart }: { squad: any; onStart: () => Promise<void> }) {
+function SquadReadiness({ squad, onStart }: { squad: any; onStart: () => Promise<void> }) {
   const [members, setMembers] = useState<any[]>([]),
-    [messages, setMessages] = useState<any[]>([]),
-    [text, setText] = useState(''),
     [connected, setConnected] = useState(false);
   const lobby = useRef<Room | null>(null);
   const session = useUI((s) => s.session);
@@ -1255,7 +1290,7 @@ function SquadChat({ squad, onStart }: { squad: any; onStart: () => Promise<void
         lobby.current = r;
         setConnected(true);
         r.onMessage('members', setMembers);
-        r.onMessage('chat', (m) => setMessages((old) => [...old.slice(-19), m]));
+        r.onMessage('chat', () => {});
         r.onMessage('start', () => {
           void onStart();
         });
@@ -1272,7 +1307,7 @@ function SquadChat({ squad, onStart }: { squad: any; onStart: () => Promise<void
   return (
     <div className="squad-chat">
       <div>
-        <span className="eyebrow">SQUAD LOBBY · {connected ? 'CONNECTED' : 'CONNECTING'}</span>
+        <span className="eyebrow">BATTLE READINESS · {connected ? 'CONNECTED' : 'CONNECTING'}</span>
         <p>
           {members.length
             ? members.map((m) => m.name + (m.ready ? ' ✓ READY' : ' · NOT READY')).join(' / ')
@@ -1282,36 +1317,6 @@ function SquadChat({ squad, onStart }: { squad: any; onStart: () => Promise<void
           All connected human members must ready up. Empty battlefield slots use labeled server AI.
         </small>
       </div>
-      <div className="chat-log">
-        {messages.map((m, i) => (
-          <p key={i}>
-            <time>
-              {new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </time>{' '}
-            <b>{m.name}:</b> {m.text}
-          </p>
-        ))}
-      </div>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (text.trim()) {
-            lobby.current?.send('chat', text.trim());
-            setText('');
-          }
-        }}
-      >
-        <input
-          aria-label="Squad lobby message"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          maxLength={200}
-          placeholder="Speak with your squad…"
-        />
-        <button disabled={!connected || !text.trim()} className="outline-btn">
-          SEND
-        </button>
-      </form>
     </div>
   );
 }
