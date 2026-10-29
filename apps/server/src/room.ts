@@ -1,3 +1,5 @@
+import { assertHumanBand, readAvatar } from './customization';
+import { ageBands } from '../../../packages/shared/src/customization';
 import { Room, type Client } from '@colyseus/core';
 import {
   fighter,
@@ -21,17 +23,28 @@ export class BattleRoom extends Room {
   started = new Date().toISOString();
   elapsed = 0;
   recorded = false;
+  saving = false;
+  retryAt = 0;
   joinIds = new Map<string, string>();
   teams = new Map<string, number>();
   roleOrders = [shuffledRoles(), shuffledRoles()];
   eventLog: GameEvent[] = [];
   loggedEvents = new Set<string>();
-  onCreate(o: { mode?: Mode; demo?: boolean; squadId?: string }) {
+  onCreate(o: { ageBand?: string; mode?: Mode; demo?: boolean; squadId?: string }) {
     const mode = z.enum(['tutorial', 'duel', 'squad', 'quest']).parse(o.mode ?? 'duel');
     this.maxClients = mode === 'duel' ? 2 : mode === 'tutorial' ? 1 : mode === 'squad' ? 8 : 4;
     this.w = world(mode, !!o.demo);
+    if (!ageBands.includes(o.ageBand as any)) {
+      this.maxClients = 1;
+      void this.setPrivate(true);
+    }
     if (mode === 'tutorial') void this.setPrivate(true);
-    this.setMetadata({ mode, demo: !!o.demo, squadId: o.squadId ?? '' });
+    this.setMetadata({
+      mode,
+      demo: !!o.demo,
+      squadId: o.squadId ?? '',
+      ageBand: o.ageBand ?? 'solo',
+    });
     this.onMessage('input', (c, data) => {
       const result = inputSchema.safeParse(data);
       if (!result.success) return;
@@ -43,7 +56,12 @@ export class BattleRoom extends Room {
     this.onMessage('chat', (c, data) => {
       if (this.elapsed > 5 || typeof data !== 'string' || data.length > 200) return;
       const now = Date.now();
-      const last = (c.userData as { chat?: number })?.chat ?? 0;
+      const last =
+        (
+          c.userData as {
+            chat?: number;
+          }
+        )?.chat ?? 0;
       if (now - last < 1000) return;
       c.userData = { chat: now };
       this.broadcast('chat', {
@@ -61,13 +79,22 @@ export class BattleRoom extends Room {
       }
     }, 1000 / 30);
   }
-  onAuth(
+  async onAuth(
     _c: Client,
-    o: { token: string; demo: boolean; mode: Mode; squadId?: string; protocol?: number },
+    o: {
+      token: string;
+      demo: boolean;
+      mode: Mode;
+      squadId?: string;
+      protocol?: number;
+    },
   ) {
     if (o.protocol !== PROTOCOL_VERSION)
       throw Error('Your game version is outdated. Refresh this page.');
-    const p = authenticate(o.token);
+    const p = await authenticate(o.token);
+    if (this.maxClients > 1) await assertHumanBand(p.id, this.metadata.ageBand);
+    const avatar = await readAvatar(p.id);
+    Object.assign(p, { avatar });
     if (this.w.finished) throw Error('Match already completed');
     if (this.elapsed > 5 && this.w.mode !== 'quest') throw Error('Match already started');
     if (this.w.mode === 'tutorial' && this.w.players.length > 0)
@@ -78,9 +105,9 @@ export class BattleRoom extends Room {
     if (this.w.mode === 'squad' && p.progress.stage < 2) throw Error('Stage 2 is locked');
     if (this.w.mode === 'quest' && p.progress.stage < 3) throw Error('Stage 3 is locked');
     if (['squad', 'quest'].includes(this.w.mode)) {
-      const s = db
+      const s = (await db
         .prepare('SELECT members FROM squads WHERE id=? AND demo=?')
-        .get(o.squadId ?? '', p.demo) as any;
+        .get(o.squadId ?? '', p.demo)) as any;
       if (!s || !JSON.parse(s.members).includes(p.id)) throw Error('Squad membership required');
       if (this.w.mode === 'squad' && !this.teams.has(o.squadId!) && this.teams.size >= 2)
         throw Error('Both squads are full');
@@ -94,12 +121,19 @@ export class BattleRoom extends Room {
     }
     return p;
   }
-  onJoin(c: Client, o: { hero?: number; squadId?: string }, auth: Profile) {
+  async onJoin(
+    c: Client,
+    o: {
+      hero?: number;
+      squadId?: string;
+    },
+    auth: Profile,
+  ) {
     const p = auth ?? (c.auth as Profile);
     if (this.elapsed > 5 && this.w.mode !== 'quest') throw Error('Match already started');
     this.joinIds.set(c.sessionId, p.id);
     p.hero = Math.max(0, Math.min(3, Number(o.hero) || 0));
-    saveProfile(p);
+    await db.prepare('UPDATE profiles SET hero=? WHERE id=?').run(p.hero, p.id);
     let team = this.w.mode === 'duel' ? this.w.players.length : 0;
     if (this.w.mode === 'squad') {
       if (!this.teams.has(o.squadId!)) this.teams.set(o.squadId!, this.teams.size);
@@ -124,6 +158,7 @@ export class BattleRoom extends Room {
       f.y = replacement.y;
       f.hp = replacement.hp;
     }
+    f.avatar = p.avatar;
     this.w.players.push(f);
     c.send('identity', { id: p.id, room: this.roomId });
     c.send('snapshot', this.w);
@@ -139,6 +174,7 @@ export class BattleRoom extends Room {
     if (!consented) {
       try {
         const reconnected = await this.allowReconnection(c, 30);
+        if (this.maxClients > 1) await assertHumanBand(p.id, this.metadata.ageBand);
         p.bot = false;
         reconnected.send('snapshot', this.w);
         if (this.recorded) reconnected.send('result', { matchId: this.roomId });
@@ -149,6 +185,10 @@ export class BattleRoom extends Room {
     }
   }
   update() {
+    if (this.w.finished) {
+      if (!this.recorded && !this.saving && Date.now() >= this.retryAt) void this.settle();
+      return;
+    }
     if (this.recorded) return;
     this.elapsed += 1 / 30;
     if (this.elapsed < 5 && this.w.mode !== 'tutorial') {
@@ -213,14 +253,28 @@ export class BattleRoom extends Room {
     }
     if (this.eventLog.length > 5000) this.eventLog.splice(0, this.eventLog.length - 5000);
     for (const p of training) p.bot = true;
-    if (this.w.finished && !this.recorded) {
-      recordResult(this.roomId, { ...this.w, events: this.eventLog }, this.started);
+    if (this.w.finished) void this.settle();
+    if (this.w.tick % 2 === 0 || this.w.finished) this.broadcast('snapshot', this.w);
+  }
+  async settle() {
+    if (this.saving || this.recorded) return;
+    this.saving = true;
+    this.broadcast('saving', { status: 'pending' });
+    try {
+      await recordResult(this.roomId, { ...this.w, events: this.eventLog }, this.started);
       this.recorded = true;
-      this.broadcast('result', { matchId: this.roomId });
+      this.broadcast('result', { matchId: this.roomId, saved: true });
       this.clock.setTimeout(() => {
         void this.disconnect();
       }, 60000);
+    } catch {
+      this.retryAt = Date.now() + 3000;
+      this.broadcast('saving', {
+        status: 'retrying',
+        message: 'Saving progress. Please stay connected.',
+      });
+    } finally {
+      this.saving = false;
     }
-    if (this.w.tick % 2 === 0 || this.w.finished) this.broadcast('snapshot', this.w);
   }
 }

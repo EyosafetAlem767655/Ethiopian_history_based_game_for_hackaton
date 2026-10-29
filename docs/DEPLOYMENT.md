@@ -1,112 +1,139 @@
-# Deploy ክብረ ጉግስ — Kibre Gugs
+# Deploy ክብረ ጉግስ: Vercel + free Render + free Supabase
 
-Keep your existing Vercel and Supabase projects. Add one Railway service for HTTP and Colyseus. SQLite on its volume remains the runtime authority. Supabase provides optional authenticated accounts, private gathering images, and queued hosted record mirrors. Do not delete existing data or rerun migration 001.
+Keep the existing Vercel and Supabase projects. Render runs one Node/Colyseus instance; Supabase Postgres holds authoritative records. SQLite is for local development. No Railway, Neon or persistent disk is required.
 
-## 1. Back up before upgrading
+## 1. Back up and validate
 
-Back up `data/knights.sqlite` with `node --import tsx scripts/backup.ts output/backups/knights.sqlite`. Preserve the existing backend volume and `SESSION_SECRET`. Installations without an environment override keep a generated signing secret inside SQLite. Changing the active secret invalidates guest sessions. Browser storage must also survive for guests to retain access.
+Use Node 22 and pnpm 11.5.1. On Windows use pnpm.cmd if needed.
 
-Save the current deployment revision and environment settings privately. Never put a service-role key, signer key, or session secret in a `VITE_*` variable.
+    pnpm install --frozen-lockfile
+    pnpm typecheck
+    pnpm test
+    pnpm build
+    node --import tsx scripts/backup.ts output/backups/before-render.sqlite
 
-## 2. Check locally
+Preserve the old revision, database and active SESSION*SECRET privately. Without an environment override, the old generated secret is the session row in SQLite's secrets table. Transfer that value privately to Render; changing it invalidates existing guest sessions. Browser storage also holds guest tokens. Never put signing secrets, database passwords or privileged keys in VITE*\* variables.
 
-Use Node 22.18+ and pnpm 11. Run `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, and `pnpm build`. Windows users can use `pnpm.cmd`. `pnpm dev` starts the frontend at `http://localhost:5173` and backend at `http://localhost:2567`.
+Self-hosted vision runtime/model/OCR files and licenses are included under apps/web/public/vision. The optional node scripts/prepare-vision.mjs command refreshes runtime files from installed dependencies; it does not replace models. Commit these assets, the artwork and lockfile with the source.
 
-Only the Vite development server supplies an API proxy. Root `.env` belongs to the backend. Vite reads `apps/web/.env` or build-environment variables. See `.env.example`. Commit and push the updated source revision, including the new artwork, font/license, icons and migration, before deploying it from your connected repository. Keep secrets, runtime data and test output outside the commit.
+## 2. Apply only pending Supabase migrations
 
-## 3. Create the Railway backend
+In the existing project's SQL editor apply 002_campaign.sql if still pending, then 003_runtime.sql and 004_evidence_cleanup.sql. For CLI-managed installations inspect supabase migration list first. Do not rerun 001, delete the project or use supabase db reset on production.
 
-Create a Railway project/service from this repository, using repository root as the service root. Use the included `Dockerfile` and `railway.json`. Deploy **one instance**, with no sleeping/serverless mode for active games. Room memory and SQLite are single-instance by design.
+003 adds a private game_runtime schema and copies existing hosted records without overwriting runtime rows. Existing public tables remain as legacy records; all new game writes/reads use game_runtime. Do not expose this schema in the Data API. Canonical game IDs remain distinct from linked Supabase auth IDs. Distinct accounts are not automatically merged.
 
-Attach a persistent volume at **`/app/data` before production play**. Configure:
+Keep gatherings and age-evidence storage buckets private. Do not add public read or client-upload policies for evidence.
 
-| Railway variable            | Value                                                                                                     |
-| --------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `DB_PATH`                   | `/app/data/knights.sqlite`                                                                                |
-| `SESSION_SECRET`            | Preserve the existing value; for a new installation generate at least 32 random bytes and store privately |
-| `CORS_ORIGINS`              | `https://ethiopian-history-based-game-for-ha.vercel.app`                                                  |
-| `ENABLE_DEMO`               | `true`                                                                                                    |
-| `ALLOW_CHAIN_BROADCAST`     | `false` until separately authorized                                                                       |
-| `SUPABASE_URL`              | Existing Supabase project URL, if enabling hosted accounts                                                |
-| `SUPABASE_SERVICE_ROLE_KEY` | Secret service-role key, backend only                                                                     |
+## 3. Import existing SQLite records when applicable
 
-Railway provides `PORT`. Generate a public HTTPS domain for this service. Your API endpoint becomes `https://YOUR-ACTUAL-RAILWAY-DOMAIN`; WebSocket endpoint is `wss://YOUR-ACTUAL-RAILWAY-DOMAIN`. These are the backend domain, without `/api`, `/matchmake`, or a Vercel URL. When migrating a database that uses its generated internal signing secret, leave `SESSION_SECRET` unset so that same secret remains active; do not override it with a new value.
+Stop gameplay during migration. In your local process environment supply SUPABASE_DB_URL and the preserved SESSION_SECRET privately. Copy the **transaction pooler** PostgreSQL connection from Supabase Dashboard → Connect, usually port 6543. Use the database password, URL-encoded; this is different from an API key. Prepared statements are disabled and the server pool is limited to four connections.
 
-Volumes are mounted at runtime, not build time, and have deployment/replica constraints. Review [Railway volume documentation](https://docs.railway.com/volumes/reference). SQLite and live room memory are the reasons for this persistent service architecture.
+    node --import tsx scripts/import-sqlite.ts --source=output/backups/before-render.sqlite
+    node --import tsx scripts/import-sqlite.ts --source=output/backups/before-render.sqlite --apply
 
-To migrate existing local records, stop gameplay, create a coherent SQLite backup, transfer it to the volume as `knights.sqlite`, and preserve the active signing secret. Do this before creating new production records. Do not overwrite an active production database with an old local copy.
+The first command is a dry run. Without a target URL it checks only source integrity/counts; with the URL it also detects target duplicates/conflicts. Apply uses one database transaction and creates a pre-import backup. Conflicts cause rollback; reconcile them deliberately rather than overwriting newer records. Identical repeated imports skip duplicates. Do not import a database still receiving writes.
 
-## 4. Verify backend health first
+If the old backend used an environment override instead of its generated SQLite secret, preserve that actual override and pass --external-secret. The tool does not print secrets.
 
-Open `https://YOUR-ACTUAL-RAILWAY-DOMAIN/api/health`. Require `Content-Type: application/json` and:
+## 4. Create a free Render Web Service
 
-```json
-{
-  "ok": true,
-  "identity": "local-guest",
-  "persistence": "sqlite",
-  "blockchain": "simulated",
-  "protocol": 2,
-  "tickRate": 30
-}
-```
+Push the reviewed source and assets to your repository. In Render choose New → Web Service, connect the repository, choose Docker, repository root, and the Free instance. Alternatively use render.yaml as a Blueprint. Use one instance and health path /api/health; no volume is needed.
 
-An HTML page, blank body, Railway error page, or 404 is a deployment failure. Inspect Railway logs and the configured `/api/health` health check. CORS must contain the exact frontend HTTPS origin with no path or trailing slash. Add permitted preview origins explicitly, comma separated.
+| Render variable                                  | Value                                                                         |
+| ------------------------------------------------ | ----------------------------------------------------------------------------- |
+| PERSISTENCE                                      | supabase                                                                      |
+| SUPABASE_DB_URL                                  | Private transaction-pooler PostgreSQL URL including encoded database password |
+| SUPABASE_DB_CA                                   | Supabase database CA certificate (PEM), see below                             |
+| SESSION_SECRET                                   | Preserved active signing secret; strong random secret for a new installation  |
+| SUPABASE_URL                                     | Existing project URL                                                          |
+| SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY | Backend-only privileged Supabase key                                          |
+| CORS_ORIGINS                                     | https://ethiopian-history-based-game-for-ha.vercel.app                        |
+| ENABLE_DEMO                                      | true                                                                          |
+| ALLOW_CHAIN_BROADCAST                            | false until separately authorized                                             |
+| AGE_REVIEWER_IDS                                 | Leave unset until cleanup and reviewer setup are verified                     |
 
-## 5. Upgrade the existing Supabase project additively
+The server connects to Postgres with full TLS certificate verification. Supabase signs its database and pooler certificates with its own root CA, which Node does not trust by default, so without SUPABASE_DB_CA startup fails with `SELF_SIGNED_CERT_IN_CHAIN` and the health check never passes. Download the certificate from Supabase Dashboard → Project Settings → Database → SSL Configuration and paste the whole PEM, including the BEGIN/END lines, as the value. Escaped `\n` newlines are accepted. The same variable is used by scripts/import-sqlite.ts.
 
-In your current project's SQL editor apply **only `supabase/migrations/002_campaign.sql`** if 001 was previously applied. It adds campaign progress, own-account reads, and a trusted atomic campaign-result RPC. It does not clear profiles, ratings, matches, images, or legacy unlocks.
+CORS_ORIGINS is set in the dashboard (`sync: false` in render.yaml). Production startup refuses anything other than exact https origins, so use the Vercel origin with no path or trailing slash, comma-separating any custom domain or preview origin you also want.
 
-If using CLI migration tracking, inspect `supabase migration list` first and apply only pending migrations to the linked existing project. Never run `supabase db reset` on production. For a completely new project only, apply 001 once, then 002. Keep the existing `gatherings` bucket private.
+Render supplies PORT. Copy the service's actual domain. If it is kibre-gugs-server-EXAMPLE.onrender.com, the API origin is https://kibre-gugs-server-EXAMPLE.onrender.com and WebSocket origin is wss://kibre-gugs-server-EXAMPLE.onrender.com. Replace the example domain. Append no /api or /matchmake to these environment values.
 
-Under Authentication → URL Configuration set:
+Free Render sleeps after 15 idle minutes, takes about a minute to wake, and may restart. The frontend shows a bounded wake-up screen before account/match requests. Active rooms are in memory; interrupted missions restart from their last saved clear. Confirmed results, squads and progression persist in Supabase. No artificial keepalive is included. See [free limits](https://render.com/docs/free) and [WebSockets](https://render.com/docs/websocket).
 
-| Setting                   | Exact value                                               |
-| ------------------------- | --------------------------------------------------------- |
-| Site URL                  | `https://ethiopian-history-based-game-for-ha.vercel.app/` |
-| Additional redirect URL   | `https://ethiopian-history-based-game-for-ha.vercel.app/` |
-| Local redirect, if needed | `http://localhost:5173/`                                  |
+## 5. Verify backend health first
 
-Add only intentional preview redirects. Keep email authentication enabled. See [Supabase redirect URL documentation](https://supabase.com/docs/guides/auth/redirect-urls). Guests remain guests; genuine gathering requires four separate authenticated human accounts, completed Chapter II or valid legacy qualification, a consented private image, and all four approvals. Test image deletion. The lunch pass remains a prototype without real-world redemption.
+Open https://YOUR-ACTUAL-RENDER-DOMAIN/api/health. Require successful JSON containing ok: true, persistence: "supabase", protocol: 2 and tickRate: 30. Blockchain is simulated by default. Repair missing migrations, pooler credentials or startup configuration using Render logs before proceeding.
 
-## 6. Configure and redeploy existing Vercel
+HTML, an empty body or a provider error page is not game API success. Cold startup takes longer than normal requests. Request IDs help diagnose backend errors.
 
-Your production origin is **`https://ethiopian-history-based-game-for-ha.vercel.app`**.
+## 6. Configure existing Supabase authentication
 
-Use repository root as Root Directory, `pnpm build` as Build Command, and `apps/web/dist` as Output Directory. Root `vercel.json` is canonical. If the project currently uses `apps/web` as root, change it to repository root to match this monorepo build.
+Under Authentication → URL Configuration:
 
-Set these **Vercel Production** environment variables:
+| Setting                       | Value                                                   |
+| ----------------------------- | ------------------------------------------------------- |
+| Site URL                      | https://ethiopian-history-based-game-for-ha.vercel.app/ |
+| Production redirect           | https://ethiopian-history-based-game-for-ha.vercel.app/ |
+| Optional development redirect | http://localhost:5173/                                  |
 
-| Vercel variable          | Value                                                       |
-| ------------------------ | ----------------------------------------------------------- |
-| `VITE_API_URL`           | `https://YOUR-ACTUAL-RAILWAY-DOMAIN`                        |
-| `VITE_WS_URL`            | `wss://YOUR-ACTUAL-RAILWAY-DOMAIN`                          |
-| `VITE_SUPABASE_URL`      | Existing project URL, if enabling hosted authentication     |
-| `VITE_SUPABASE_ANON_KEY` | Existing public anon key, if enabling hosted authentication |
+Keep email authentication enabled. Add only intentional preview redirects. A guest remains a guest; selecting an authenticated account does not silently merge a different guest's progress.
 
-**Redeploy Vercel after saving the variables.** Vite embeds them at build time. Dashboard changes alone cannot repair an already-built frontend. Deploy the new source revision, then hard-refresh.
+## 7. Configure and redeploy Vercel
 
-The SPA rewrite excludes `/api/*`, assets, fonts, and icons. The browser calls Railway directly. `/api/health` on the Vercel domain is not the backend health endpoint and should not return a successful frontend HTML fallback. See [Vercel rewrite documentation](https://vercel.com/docs/routing/rewrites).
+Use repository root (leave Root Directory empty), and let the root vercel.json supply the install command, build command pnpm build and output directory apps/web/dist. There is no apps/web/vercel.json; the web package has no dependencies of its own.
 
-## 7. Verify production behavior
+| Vercel Production variable                              | Value                             |
+| ------------------------------------------------------- | --------------------------------- |
+| ENABLE_EXPERIMENTAL_COREPACK                            | 1 (uses the pinned pnpm 11.5.1)   |
+| VITE_API_URL                                            | https://YOUR-ACTUAL-RENDER-DOMAIN |
+| VITE_WS_URL                                             | wss://YOUR-ACTUAL-RENDER-DOMAIN   |
+| VITE_SUPABASE_URL                                       | Existing project URL              |
+| VITE_SUPABASE_PUBLISHABLE_KEY or VITE_SUPABASE_ANON_KEY | Frontend-safe public key          |
 
-1. Open two independent browser profiles. Confirm Amharic text and favicon load, and Network requests use Railway HTTPS/WSS with no localhost address.
-2. Use distinct guest names. Complete training and queue Royal Arena duels within five seconds of each other. Confirm both humans share real attacks and authoritative health changes.
-3. Open Hall of Legends. It must load records without the old SQLite JSON-path failure. Failed requests expose `X-Request-ID`; quote this when examining backend logs.
-4. Clear a campaign mission, reload, and confirm its checkpoint persists. Campaign clears must not alter duel wins or rating.
-5. Disconnect one browser briefly and reconnect within 30 seconds. Confirm the same room and warrior return.
-6. Restart Railway and verify identities, ratings, achievements, and campaign clears survive. Active matches must be retried after a process restart; the reconnection grace covers network loss while the process stays alive.
-7. Invite a second human into a persistent squad, ready both players, and verify Conquest. Test the isolated solo demo, simulated gathering, and cooperative finale separately.
-8. When hosted auth is enabled, test four accounts, private upload, all approvals, and deletion. Ordinary authenticated clients must not write result/progression tables directly.
+**Redeploy Vercel after saving these values.** Vite embeds them at build time. Vercel variables do not configure Render. All server secrets belong on Render/Supabase, never in VITE\_\* variables.
 
-## 8. Backups and rollback
+The SPA fallback excludes /api/\*. Browsers call Render directly: /api/health on the Vercel domain is not the backend endpoint. CORS uses the exact frontend origin without a path or trailing slash; add preview origins explicitly.
 
-The included backup script uses SQLite's online backup API, including committed WAL data. Locally run `node --import tsx scripts/backup.ts output/backups/knights.sqlite`. In the Railway service container use a destination under `/app/data/backups/`. Download backups to a separate protected location. Enable Railway volume backups as an additional safeguard. Preserve the active session secret in the recovery plan.
+## 8. Enable scheduled evidence deletion before accepting IDs
 
-For code rollback, redeploy the previous Railway revision and matching Vercel revision while retaining the volume, domain, and secret. Campaign schema changes are additive and can remain. Do not delete or replace your Supabase project. If restoring data is necessary, stop the service, restore a coherent backup, preserve its secret, restart, and verify health/identity/history. A restore removes records newer than its recovery point.
+Create a private random AGE_CLEANUP_SECRET and set it in Supabase Edge Function secrets. Deploy:
 
-## 9. Optional chain activation and handoff status
+    supabase functions deploy age-cleanup --no-verify-jwt
 
-Contract deployment and broadcasts still require explicit authorization and a dedicated funded Base Sepolia signer. Follow `packages/contracts/README.md`. Configure backend-only `BASE_SEPOLIA_RPC`, `RECORDS_ADDRESS`, and `ATTESTOR_PRIVATE_KEY`; enable `ALLOW_CHAIN_BROADCAST` only after authorization. Demo records stay simulated. Pending/failed outbox entries retry independently of gameplay. Explorer links require actual transaction hashes. Automatic ERC-1155 inventory minting and thirdweb onboarding remain unavailable.
+supabase/config.toml also sets `verify_jwt = false` for this function, so a redeploy without the flag does not start rejecting the scheduler with 401. The function checks its private X-Cleanup-Secret instead of a user JWT; public keys do not authorize cleanup. In the SQL editor run supabase/age-cleanup-schedule.sql after privately replacing its project URL and secret placeholders. It stores the secret in Vault and installs an hourly Cron job. Update named Vault entries rather than duplicating them on upgrades. See [Supabase scheduling](https://supabase.com/docs/guides/functions/schedule-functions).
 
-This repository does not provision Railway or modify hosted projects. Local checks do not establish that the production backend, Supabase migration, genuine gathering, or live chain adapter has been deployed. Record each integration separately as configured, verified, simulated, or unavailable.
+Verify with a **synthetic image**, not a real ID: upload it privately, create an expired synthetic review row, invoke cleanup, and confirm object deletion plus the row's cleared path. Calls without the cleanup secret must return 403. Check Cron history and Edge logs. Pending submissions become inaccessible after 24 hours; physical deletion occurs on the next successful hourly run. Failed deletions retain their path for retry.
+
+## 9. Configure reviewers and age matching
+
+Sign in to the game using the designated reviewer's Supabase email account. Find its UUID under Authentication → Users. Set comma-separated reviewer UUIDs in Render's AGE_REVIEWER_IDS and redeploy only after cleanup works.
+
+While signed in, visit https://ethiopian-history-based-game-for-ha.vercel.app/?review=1. Choose Set up / unlock reviewer MFA, scan the QR code with an authenticator, and enter a current code. Every reviewer API call requires both the server allowlist and a validated MFA session.
+
+Players consent, select a Fayda image and confirm its complete birth date/calendar. OCR only suggests a date. Reviewers inspect the image and date before approval, rejection or resubmission. Unclear/incomplete dates require resubmission. This is manual age review, not government document authentication, liveness or proof that the ID belongs to the submitter.
+
+All human duels, squads and private invitations require reviewed adults in the same band: 18–24, 25–34, 35–44 or 45+. Birthdays use Addis Ababa dates. Solo, bots and demo require no ID. Sparse pools use bots, never silently wider age bands.
+
+Evidence is deleted after a decision/withdrawal. Approved birth dates remain private for band calculation; withdrawal removes them and future human eligibility. Do not include evidence or birth dates in analytics, public results, chain records, screenshots or support logs.
+
+## 10. Verify with two browsers
+
+1. Check HTTPS JSON health and a successful WSS connection to Render in DevTools.
+2. Create a guest, save an avatar and play solo. Camera tracks must stop after capture/close.
+3. Check articulated movement, flame swings, ambient music, mute and separate volume controls.
+4. Open Hall of Legends and finish a mission. Wait for RESULT SAVED before continuing.
+5. Restart Render; verify identity, history, avatar and cleared mission survive.
+6. With two genuinely reviewed authenticated test accounts in the same band, share an invite and fight in one room. Verify cross-band and unverified joins are denied.
+7. Drop a browser connection and reconnect within 30 seconds while the server remains running. A server restart requires a new room.
+8. Test withdrawal, expiry, reviewer denial and actual deletion using synthetic evidence.
+9. Complete the solo demo. Genuine Gathering still requires four authenticated eligible humans and separate approvals. Demo gathering remains visibly simulated.
+
+## 11. Backups, monitoring and rollback
+
+Free Supabase has quotas and inactivity pausing; paid automatic backups are not included. Arrange private database exports, monitor usage and test restoration. Exclude temporary evidence objects from backups. See [Supabase plan details](https://supabase.com/pricing).
+
+Retain the SQLite snapshot, active signing secret and a verified Supabase export. Monitor Render health/restarts, result-save retries, database usage and cleanup history. Free tiers provide no 24/7 availability guarantee.
+
+Rollback to a tested revision supporting the new persistence adapter while keeping additive schemas and secrets. An old SQLite-only backend on free Render is not a safe rollback. Do not restore stale data over newer results; restore into an isolated project first, compare counts/hashes and schedule a deliberate cutover.
+
+Public verification requires the deployed Render URL and owner configuration. Base Sepolia remains simulated unless separately configured/authorized; this upgrade broadcasts no public transaction.

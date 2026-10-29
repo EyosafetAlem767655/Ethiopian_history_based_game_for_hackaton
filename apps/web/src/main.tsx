@@ -1,8 +1,11 @@
+import { AvatarEditor } from './AvatarEditor';
+import { AgePanel, ReviewPanel } from './AgePanel';
+import './personalization.css';
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Client, type Room } from 'colyseus.js';
 import QRCode from 'qrcode';
-import { useUI, api, saveSession, API, connection } from './store';
+import { useUI, api, saveSession, API, connection, wakeServer } from './store';
 import { requestJSON } from './services/http';
 import { CampaignScreen } from './CampaignScreen';
 import { ScrollGuide } from './ScrollGuide';
@@ -57,8 +60,11 @@ function Portrait({ hero = 0, className = '' }: { hero?: number; className?: str
   );
 }
 function App() {
-  const { session, hero, snapshot, me, error, muted } = useUI();
-  const [page, setPage] = useState('home'),
+  const { session, hero, snapshot, me, error, muted, warming, resultSaved, volume, musicVolume } =
+    useUI();
+  const [page, setPage] = useState(
+      new URLSearchParams(location.search).has('review') ? 'review' : 'home',
+    ),
     [name, setName] = useState(''),
     [busy, setBusy] = useState(false),
     [room, setRoom] = useState<Room | null>(null),
@@ -73,6 +79,22 @@ function App() {
     [chat, setChat] = useState('');
   const gameEl = useRef<HTMLDivElement>(null);
   const progress = me?.profile?.progress ?? session?.profile.progress;
+  useEffect(() => {
+    audio.setTheme(
+      page !== 'battle'
+        ? 'menu'
+        : snapshot?.bossMax
+          ? 'boss'
+          : snapshot?.players.some((p) => p.team === 1 && p.hp > 0)
+            ? 'combat'
+            : 'exploration',
+    );
+  }, [
+    page,
+    snapshot?.phase,
+    !!snapshot?.bossMax,
+    snapshot?.players.some((p) => p.team === 1 && p.hp > 0),
+  ]);
   async function refresh() {
     if (session) {
       try {
@@ -143,8 +165,9 @@ function App() {
     audio.unlock();
     await action(async () => {
       if (!session) return;
+      await wakeServer();
       await room?.leave();
-      useUI.setState({ snapshot: null });
+      useUI.setState({ snapshot: null, resultSaved: false });
       setWaiting(mode === 'tutorial' ? 0 : 5);
       setMessages([]);
       setPaused(false);
@@ -154,6 +177,7 @@ function App() {
       const r = await match(mode === 'squad' ? 'conquest' : mode === 'quest' ? 'quest' : 'battle', {
         mode,
         protocol: PROTOCOL_VERSION,
+        ageBand: useUI.getState().me?.age?.band ?? 'solo',
         demo: !!session.profile.demo,
         squadId: mode === 'squad' || mode === 'quest' ? (squad?.id ?? '') : '',
         token: session.token,
@@ -168,6 +192,7 @@ function App() {
     audio.unlock();
     await action(async () => {
       if (!session) return;
+      await wakeServer();
       await room?.leave();
       let current = squad;
       if (MISSIONS[missionId - 1].chapter > 1 && !current) {
@@ -176,13 +201,14 @@ function App() {
         const url = location.origin + '/?pass=' + encodeURIComponent(current.id);
         setQr(await QRCode.toDataURL(url, { width: 160 }));
       }
-      useUI.setState({ snapshot: null });
+      useUI.setState({ snapshot: null, resultSaved: false });
       setWaiting(2);
       setPaused(false);
       const c = new Client(connection().ws);
       const options = {
         missionId,
         protocol: PROTOCOL_VERSION,
+        ageBand: useUI.getState().me?.age?.band ?? 'solo',
         demo: !!session.profile.demo,
         token: session.token,
         hero,
@@ -210,7 +236,11 @@ function App() {
     r.onMessage('waiting', (m: { seconds: number }) => setWaiting(m.seconds));
     r.onMessage('identity', () => {});
     r.onMessage('chat', (m: any) => setMessages((v) => [...v.slice(-15), m]));
-    r.onMessage('result', () => void refresh());
+    r.onMessage('saving', () => useUI.setState({ resultSaved: false }));
+    r.onMessage('result', () => {
+      useUI.setState({ resultSaved: true });
+      void refresh();
+    });
     r.onError((_code, message) => useUI.setState({ error: message ?? 'Connection error' }));
     r.onLeave(async (code) => {
       setWaiting(0);
@@ -237,7 +267,7 @@ function App() {
   async function exit() {
     await room?.leave();
     setRoom(null);
-    useUI.setState({ snapshot: null });
+    useUI.setState({ snapshot: null, resultSaved: false });
     await refresh();
     setPage('journey');
   }
@@ -264,8 +294,14 @@ function App() {
     ['heroes', '♜', 'Warriors'],
     ['leaderboard', '♛', 'Hall of legends'],
     ['profile', '◈', 'Your legacy'],
+    ['personalize', '◉', 'Your likeness'],
+    ['age', '◇', 'Adult matchmaking'],
   ];
   function navigate(id: string) {
+    if (['personalize', 'age', 'review'].includes(id) && !session) {
+      setPage('identity');
+      return;
+    }
     if (id === 'leaderboard' && session)
       void action(async () => {
         setLeaders(await api('/leaderboard'));
@@ -307,6 +343,7 @@ function App() {
               {nav.map(([id, icon, label]) => (
                 <button
                   key={id}
+                  disabled={busy}
                   onClick={() => navigate(id)}
                   className={page === id ? 'active' : ''}
                 >
@@ -317,7 +354,9 @@ function App() {
               ))}
             </nav>
             <div className="sidebar-bottom">
-              <div className="realm-dot" /> REALM ONLINE <span>30 Hz</span>
+              <div className="realm-dot" />{' '}
+              {warming ? 'WAKING REALM' : me?.profile ? 'REALM CONNECTED' : 'REALM PENDING'}{' '}
+              <span>30 Hz</span>
             </div>
             <div className="side-foot">FOUR WARRIORS. ONE CROWN.</div>
           </aside>
@@ -333,7 +372,10 @@ function App() {
               <button
                 className="sound"
                 aria-label="Toggle sound"
-                onClick={() => useUI.setState({ muted: !muted })}
+                onClick={() => {
+                  audio.unlock();
+                  useUI.setState({ muted: !muted });
+                }}
               >
                 {muted ? '♪̸' : '♪'}
               </button>
@@ -342,7 +384,13 @@ function App() {
                   <Portrait hero={hero} />
                   <span>
                     {session.profile.name}
-                    <small>{isDemo ? 'DEMO WARRIOR' : 'GUEST WARRIOR'}</small>
+                    <small>
+                      {isDemo
+                        ? 'DEMO WARRIOR'
+                        : me?.identity === 'supabase'
+                          ? 'AUTHENTICATED WARRIOR'
+                          : 'GUEST WARRIOR'}
+                    </small>
                   </span>
                 </button>
               ) : (
@@ -353,6 +401,14 @@ function App() {
         </>
       )}
       <main>
+        {warming && (
+          <div className="warming-message" role="status">
+            Waking game server… Free hosting can take about a minute.
+          </div>
+        )}
+        {page === 'personalize' && session && <AvatarEditor />}
+        {page === 'age' && session && <AgePanel onSignIn={() => setPage('identity')} />}
+        {page === 'review' && session && <ReviewPanel />}
         {error && (
           <div className="error" role="alert">
             {error}
@@ -582,6 +638,11 @@ function App() {
                   <div>
                     <span className="eyebrow">WELCOME, {session.profile.name.toUpperCase()}</span>
                     <h1>Your road to the throne.</h1>
+                    <p className="subtle">
+                      {me?.age?.band
+                        ? `Human matchmaking · reviewed adults ${me.age.band}`
+                        : 'Solo and AI play · Fayda review enables human matchmaking.'}
+                    </p>
                   </div>
                   <span className="demo-tag">
                     {isDemo ? 'ISOLATED STORY DEMO' : 'NORMAL PROGRESSION'}
@@ -849,6 +910,37 @@ function App() {
           </section>
         )}
         {page === 'profile' && (
+          <div className="personal-panel audio-settings">
+            <label>
+              Music{' '}
+              <input
+                aria-label="Menu music volume"
+                type="range"
+                min="0"
+                max="1"
+                step=".05"
+                value={musicVolume}
+                onChange={(e) => {
+                  audio.unlock();
+                  useUI.setState({ musicVolume: Number(e.target.value) });
+                }}
+              />
+            </label>
+            <label>
+              Sound effects{' '}
+              <input
+                aria-label="Menu sound effects volume"
+                type="range"
+                min="0"
+                max="1"
+                step=".05"
+                value={volume}
+                onChange={(e) => useUI.setState({ volume: Number(e.target.value) })}
+              />
+            </label>
+          </div>
+        )}
+        {page === 'profile' && (
           <section className="content-page">
             {!session ? (
               <Gate onPlay={() => setPage('identity')} />
@@ -1031,6 +1123,21 @@ function App() {
               }
             />
             <div className="arena-toolbar">
+              <label>
+                MUSIC{' '}
+                <input
+                  aria-label="Music volume"
+                  type="range"
+                  min="0"
+                  max="1"
+                  step=".05"
+                  value={musicVolume}
+                  onChange={(e) => {
+                    audio.unlock();
+                    useUI.setState({ musicVolume: Number(e.target.value) });
+                  }}
+                />
+              </label>
               <span>WASD / ARROWS · WHEEL TO ZOOM · F FULLSCREEN</span>
               <button
                 onClick={() => {
@@ -1042,14 +1149,14 @@ function App() {
                 ⛶ FULLSCREEN
               </button>
               <label>
-                VOLUME{' '}
+                SFX{' '}
                 <input
                   type="range"
                   min="0"
                   max="1"
                   step=".05"
                   aria-label="Sound volume"
-                  value={useUI.getState().volume}
+                  value={volume}
                   onChange={(e) => useUI.setState({ volume: Number(e.target.value) })}
                 />
               </label>
@@ -1071,7 +1178,9 @@ function App() {
                   <p>
                     {snapshot?.campaign
                       ? 'Preparing your expedition and AI companions.'
-                      : 'Searching for a rival · AI joins after five seconds'}
+                      : me?.age?.band
+                        ? 'Searching for a rival in your age band · AI joins after five seconds'
+                        : 'Solo practice · AI rival joins after five seconds'}
                   </p>
                   <span>{waiting}s</span>
                 </div>
@@ -1134,7 +1243,7 @@ function App() {
                         ? 'Aksumara is free. Every warrior has earned their place in its story.'
                         : snapshot.mode === 'tutorial'
                           ? 'Your training is complete. The Royal Trials await.'
-                          : 'An authoritative result has been recorded. Your journey continues.'}
+                          : 'Your journey continues once the server confirms this result.'}
                     </p>
                     {finalVictory && (
                       <span className="eyebrow">
@@ -1154,8 +1263,12 @@ function App() {
                         <b>{Math.round(mine?.contribution ?? 0)}</b>CONTRIBUTION
                       </span>
                     </div>
-                    <span className="verification">◈ KECCAK-256 RECORD · SIMULATED ANCHOR</span>
-                    <button className="gold-btn" onClick={exit}>
+                    <span className="verification">
+                      {resultSaved
+                        ? '◈ RESULT SAVED · CHECK HISTORY FOR ANCHOR STATUS'
+                        : 'SAVING RESULT… PLEASE STAY CONNECTED'}
+                    </span>
+                    <button className="gold-btn" disabled={!resultSaved} onClick={exit}>
                       CONTINUE THE JOURNEY →
                     </button>
                   </div>
@@ -1204,7 +1317,13 @@ function App() {
                 <kbd>E</kbd>
                 <span>INTERACT</span>
               </div>
-              <button className="sound" onClick={() => useUI.setState({ muted: !muted })}>
+              <button
+                className="sound"
+                onClick={() => {
+                  audio.unlock();
+                  useUI.setState({ muted: !muted });
+                }}
+              >
                 {muted ? '♪̸' : '♪'}
               </button>
             </div>
@@ -1273,7 +1392,11 @@ function SquadChat({ squad, onStart }: { squad: any; onStart: () => Promise<void
     window.addEventListener('knights-ready', ready);
     const endpoint = connection().ws;
     void new Client(endpoint)
-      .joinOrCreate('squad-lobby', { squadId: squad.id, token: session!.token })
+      .joinOrCreate('squad-lobby', {
+        squadId: squad.id,
+        ageBand: useUI.getState().me?.age?.band ?? 'solo',
+        token: session!.token,
+      })
       .then((r) => {
         if (cancelled) {
           void r.leave();

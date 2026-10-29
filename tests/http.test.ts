@@ -55,3 +55,17 @@ it('times out a stalled server and distinguishes network failures', async () => 
   vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline')));
   await expect(requestJSON('https://example.test')).rejects.toBeInstanceOf(ApiError);
 });
+import { readFileSync } from 'node:fs';
+it('keeps vision models and APIs outside the Vercel SPA fallback', () => {
+  const config = JSON.parse(readFileSync('vercel.json', 'utf8'));
+  const fallback = new RegExp('^' + config.rewrites[0].source + '$');
+  for (const path of [
+    '/api/health',
+    '/vision/face_landmarker.task',
+    '/vision/wasm/vision_wasm_internal.wasm',
+    '/vision/ocr/eng.traineddata.gz',
+    '/assets/rig-v3.png',
+  ])
+    expect(fallback.test(path)).toBe(false);
+  expect(fallback.test('/journey')).toBe(true);
+});

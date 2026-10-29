@@ -19,6 +19,9 @@ interface UIState {
   error: string;
   muted: boolean;
   volume: number;
+  musicVolume: number;
+  warming: boolean;
+  resultSaved: boolean;
   reducedMotion: boolean;
   set: (v: Partial<UIState>) => void;
 }
@@ -30,6 +33,9 @@ export const useUI = create<UIState>((set) => ({
   error: '',
   muted: localStorage.getItem('kibre-muted') === 'true',
   volume: Number(localStorage.getItem('kibre-volume') ?? '.65'),
+  musicVolume: Number(localStorage.getItem('kibre-music-volume') ?? '.25'),
+  warming: false,
+  resultSaved: false,
   reducedMotion:
     localStorage.getItem('kibre-motion') === 'reduced' ||
     matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -38,6 +44,8 @@ export const useUI = create<UIState>((set) => ({
 useUI.subscribe((s, p) => {
   if (s.muted !== p.muted) localStorage.setItem('kibre-muted', String(s.muted));
   if (s.volume !== p.volume) localStorage.setItem('kibre-volume', String(s.volume));
+  if (s.musicVolume !== p.musicVolume)
+    localStorage.setItem('kibre-music-volume', String(s.musicVolume));
   if (s.reducedMotion !== p.reducedMotion)
     localStorage.setItem('kibre-motion', s.reducedMotion ? 'reduced' : 'full');
 });
@@ -66,11 +74,48 @@ export function connection() {
     protocol: location.protocol,
   });
 }
-export async function api(path: string, body?: unknown) {
+let warming: Promise<void> | null = null;
+let healthyAt = 0;
+export async function wakeServer() {
+  if (Date.now() - healthyAt < 30000) return;
+  if (warming) return warming;
+  warming = (async () => {
+    useUI.setState({ warming: true });
+    const until = Date.now() + 120000;
+    try {
+      while (Date.now() < until) {
+        try {
+          const h = await requestJSON(
+            connection().api + '/api/health',
+            {},
+            Math.min(15000, until - Date.now()),
+          );
+          if (h.ok) {
+            healthyAt = Date.now();
+            return;
+          }
+        } catch (e) {
+          if ((e as ApiError).code === 'SERVER_NOT_CONFIGURED') throw e;
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      throw Error('The game server has not woken up. Check Render and Supabase, then retry.');
+    } finally {
+      useUI.setState({ warming: false });
+    }
+  })();
+  try {
+    await warming;
+  } finally {
+    warming = null;
+  }
+}
+export async function api(path: string, body?: unknown, method?: string) {
   const config = connection();
   try {
+    await wakeServer();
     return await requestJSON(config.api + '/api' + path, {
-      method: body === undefined ? 'GET' : 'POST',
+      method: method ?? (body === undefined ? 'GET' : 'POST'),
       headers: {
         'Content-Type': 'application/json',
         Authorization: 'Bearer ' + (useUI.getState().session?.token ?? ''),
@@ -78,7 +123,7 @@ export async function api(path: string, body?: unknown) {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (e) {
-    if (e instanceof ApiError && e.status === 401) {
+    if (e instanceof ApiError && e.status === 401 && !path.startsWith('/session')) {
       localStorage.removeItem('knights-session');
       useUI.setState({ session: null, me: null });
     }

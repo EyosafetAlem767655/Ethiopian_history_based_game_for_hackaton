@@ -7,6 +7,7 @@ export default [
       'output/**',
       'test-results/**',
       'packages/contracts/artifacts/**',
+      'apps/web/public/vision/**',
     ],
   },
   {

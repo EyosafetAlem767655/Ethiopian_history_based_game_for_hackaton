@@ -81,7 +81,7 @@ export async function readResponse<T = any>(response: Response): Promise<T> {
   if (!/application\/(?:[\w.+-]*\+)?json/i.test(response.headers.get('content-type') ?? ''))
     throw new ApiError(
       response.ok
-        ? 'The server address returned a webpage instead of game data. Check VITE_API_URL and deploy the Railway backend.'
+        ? 'The server address returned a webpage instead of game data. Check VITE_API_URL and deploy the Render backend.'
         : `The game server is unavailable (HTTP ${response.status}). Please try again.`,
       response.status,
       'INVALID_RESPONSE',

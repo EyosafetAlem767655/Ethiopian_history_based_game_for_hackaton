@@ -1,10 +1,102 @@
 import { useUI } from './store';
 class BattleAudio {
   context: AudioContext | null = null;
+  musicGain: GainNode | null = null;
+  effectsGain: GainNode | null = null;
+  musicTimer: ReturnType<typeof setInterval> | null = null;
+  nextNote = 0;
+  note = 0;
+  theme: 'menu' | 'exploration' | 'combat' | 'boss' = 'menu';
+  constructor() {
+    useUI.subscribe((s, p) => {
+      if (s.muted !== p.muted || s.volume !== p.volume || s.musicVolume !== p.musicVolume)
+        this.updateMusicVolume();
+    });
+    document.addEventListener('visibilitychange', () => {
+      this.updateMusicVolume();
+      if (!document.hidden && this.context?.state === 'running')
+        this.nextNote = this.context.currentTime + 0.15;
+    });
+  }
+  updateMusicVolume() {
+    if (!this.context || !this.musicGain) return;
+    const s = useUI.getState();
+    this.effectsGain?.gain.setTargetAtTime(
+      s.muted || document.hidden ? 0 : Math.max(0, Math.min(1, s.volume)),
+      this.context.currentTime,
+      0.025,
+    );
+    this.musicGain.gain.setTargetAtTime(
+      s.muted || document.hidden ? 0 : Math.max(0, Math.min(1, s.musicVolume)),
+      this.context.currentTime,
+      0.25,
+    );
+  }
+  setTheme(theme: typeof this.theme) {
+    this.theme = theme;
+  }
+  scheduleMusic() {
+    const ctx = this.context;
+    if (!ctx || ctx.state !== 'running' || document.hidden) return;
+    this.nextNote = Math.max(this.nextNote, ctx.currentTime);
+    while (this.nextNote < ctx.currentTime + 0.3) {
+      // Original slow modal composition. No recordings, paid APIs or runtime downloads.
+      const patterns = {
+        menu: [0, 7, 10, 5, 0, 12, 7, 3],
+        exploration: [0, 5, 7, 10, 12, 7, 5, 3],
+        combat: [0, 3, 7, 5, 0, 7, 10, 5],
+        boss: [0, 1, 7, 3, 0, 10, 7, 1],
+      };
+      const semitone = patterns[this.theme][this.note++ % 8],
+        root = this.theme === 'boss' ? 98 : 130.8128;
+      for (const [interval, amplitude] of [
+        [0, 0.025],
+        [12, 0.012],
+        [19, 0.007],
+      ]) {
+        const o = ctx.createOscillator(),
+          g = ctx.createGain(),
+          filter = ctx.createBiquadFilter();
+        o.type = 'sine';
+        o.frequency.value = root * 2 ** ((semitone + interval) / 12);
+        filter.type = 'lowpass';
+        filter.frequency.value = 1100;
+        const at = this.nextNote;
+        g.gain.setValueAtTime(0, at);
+        g.gain.linearRampToValueAtTime(amplitude, at + 0.7);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + 5.5);
+        o.connect(filter);
+        filter.connect(g);
+        g.connect(this.musicGain!);
+        o.start(at);
+        o.stop(at + 5.7);
+        o.onended = () => {
+          o.disconnect();
+          filter.disconnect();
+          g.disconnect();
+        };
+      }
+      this.nextNote += this.theme === 'combat' || this.theme === 'boss' ? 1.65 : 2.4;
+    }
+  }
   unlock() {
     try {
       this.context ??= new AudioContext();
+      if (!this.effectsGain) {
+        this.effectsGain = this.context.createGain();
+        this.effectsGain.connect(this.context.destination);
+      }
+      if (!this.musicGain) {
+        this.musicGain = this.context.createGain();
+        this.musicGain.gain.value = 0;
+        this.musicGain.connect(this.context.destination);
+        this.updateMusicVolume();
+      }
       void this.context.resume();
+      if (!this.musicTimer) {
+        this.musicTimer = setInterval(() => this.scheduleMusic(), 150);
+        this.nextNote = this.context.currentTime + 0.1;
+      }
     } catch {
       /* Audio controls remain available on unsupported browsers. */
     }
@@ -26,10 +118,10 @@ class BattleAudio {
       o.type = type;
       o.frequency.setValueAtTime(start, now);
       o.frequency.exponentialRampToValueAtTime(Math.max(20, end), now + duration);
-      g.gain.setValueAtTime(Math.max(0.0001, amplitude * s.volume), now);
+      g.gain.setValueAtTime(Math.max(0.0001, amplitude), now);
       g.gain.exponentialRampToValueAtTime(0.0001, now + duration);
       o.connect(g);
-      g.connect(ctx.destination);
+      g.connect(this.effectsGain!);
       o.start(now);
       o.stop(now + duration);
     };
@@ -44,11 +136,11 @@ class BattleAudio {
         gain = ctx.createGain();
       filter.type = 'bandpass';
       filter.frequency.value = kind === 'throw' ? 1800 : 1000;
-      gain.gain.value = s.volume * 0.06;
+      gain.gain.value = 0.06;
       source.buffer = buffer;
       source.connect(filter);
       filter.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(this.effectsGain!);
       source.start();
     } else if (kind === 'block') {
       tone(1100, 380, 0.18, 'triangle', 0.1);

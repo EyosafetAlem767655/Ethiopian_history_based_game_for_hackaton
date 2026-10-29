@@ -1,3 +1,5 @@
+import { assertHumanBand, readAvatar } from './customization';
+import { ageBands } from '../../../packages/shared/src/customization';
 import { Room, type Client } from '@colyseus/core';
 import { z } from 'zod';
 import {
@@ -26,20 +28,29 @@ export class CampaignRoom extends Room {
   ids = new Map<string, string>();
   elapsed = 0;
   recorded = false;
+  saving = false;
+  retryAt = 0;
   started = new Date().toISOString();
   events: GameEvent[] = [];
   seen = new Set<string>();
   roles = shuffledRoles();
-  onCreate(o: { missionId: number; demo: boolean; squadId?: string; protocol: number }) {
+  onCreate(o: {
+    ageBand?: string;
+    missionId: number;
+    demo: boolean;
+    squadId?: string;
+    protocol: number;
+  }) {
     const id = z.number().int().min(1).max(15).parse(o.missionId);
-    if(id<=5)this.roles=['guardian','spear','archer','rider'];
+    if (id <= 5) this.roles = ['guardian', 'spear', 'archer', 'rider'];
     this.w = campaignWorld(id, !!o.demo);
-    this.maxClients = o.squadId && id !== 4 ? 4 : 1;
+    this.maxClients = o.squadId && id !== 4 && ageBands.includes(o.ageBand as any) ? 4 : 1;
     this.setMetadata({
       missionId: id,
       demo: !!o.demo,
       squadId: o.squadId ?? '',
       protocol: PROTOCOL_VERSION,
+      ageBand: o.ageBand ?? 'solo',
     });
     if (!o.squadId) void this.setPrivate(true);
     this.onMessage('input', (c, data) => {
@@ -57,30 +68,45 @@ export class CampaignRoom extends Room {
       }
     }, 1000 / 30);
   }
-  onAuth(_c: Client, o: { token: string; protocol: number; squadId?: string }) {
+  async onAuth(
+    _c: Client,
+    o: {
+      token: string;
+      protocol: number;
+      squadId?: string;
+    },
+  ) {
     if (o.protocol !== PROTOCOL_VERSION)
       throw Error('Your game version is outdated. Refresh this page.');
-    const p = authenticate(o.token);
+    const p = await authenticate(o.token);
+    if (this.maxClients > 1) await assertHumanBand(p.id, this.metadata.ageBand);
+    Object.assign(p, { avatar: await readAvatar(p.id) });
     if (!!p.demo !== this.w.demo) throw Error('Demo and normal journeys cannot mix');
     if (this.w.finished) throw Error('This mission has ended');
     if (this.w.players.some((f) => f.id === p.id))
       throw Error('Already participating in this mission');
     const blocked = missionEligibility(
-      campaignProgress(p.id),
+      await campaignProgress(p.id),
       this.w.campaign!.missionId,
       this.w.demo,
     );
     if (blocked) throw Error(blocked);
     if (this.metadata.squadId) {
-      const s = db
+      const s = (await db
         .prepare('SELECT members FROM squads WHERE id=? AND demo=?')
-        .get(this.metadata.squadId, p.demo) as any;
+        .get(this.metadata.squadId, p.demo)) as any;
       if (!s || !JSON.parse(s.members).includes(p.id) || o.squadId !== this.metadata.squadId)
         throw Error('Squad membership required');
     }
     return p;
   }
-  onJoin(c: Client, o: { hero?: number }, auth: Profile) {
+  async onJoin(
+    c: Client,
+    o: {
+      hero?: number;
+    },
+    auth: Profile,
+  ) {
     const p = auth ?? (c.auth as Profile);
     this.ids.set(c.sessionId, p.id);
     const replacement = this.w.players.find((f) => f.bot && f.id.startsWith('bot') && f.team === 0);
@@ -101,11 +127,12 @@ export class CampaignRoom extends Room {
       f.y = replacement.y;
       f.hp = replacement.hp;
     }
+    f.avatar = p.avatar;
     this.w.players.push(f);
-    const progress = campaignProgress(p.id);
+    const progress = await campaignProgress(p.id);
     f.prestige = progress.honor + (progress.contribution ?? 0);
     p.hero = f.hero;
-    saveProfile(p);
+    await db.prepare('UPDATE profiles SET hero=? WHERE id=?').run(p.hero, p.id);
     c.send('identity', { id: p.id, room: this.roomId });
     c.send('snapshot', this.w);
   }
@@ -118,6 +145,7 @@ export class CampaignRoom extends Room {
     if (!consented)
       try {
         const next = await this.allowReconnection(c, 30);
+        if (this.maxClients > 1) await assertHumanBand(p.id, this.metadata.ageBand);
         p.bot = false;
         next.send('snapshot', this.w);
         if (this.recorded) next.send('result', { matchId: this.roomId });
@@ -126,6 +154,10 @@ export class CampaignRoom extends Room {
       }
   }
   update() {
+    if (this.w.finished) {
+      if (!this.recorded && !this.saving && Date.now() >= this.retryAt) void this.settle();
+      return;
+    }
     if (this.recorded) return;
     this.elapsed += 1 / 30;
     if (this.elapsed < 2) {
@@ -159,14 +191,28 @@ export class CampaignRoom extends Room {
       }
     }
     if (this.events.length > 5000) this.events.splice(0, this.events.length - 5000);
-    if (this.w.finished) {
-      recordResult(this.roomId, { ...this.w, events: this.events }, this.started);
+    if (this.w.finished) void this.settle();
+    if (this.w.tick % 2 === 0 || this.w.finished) this.broadcast('snapshot', this.w);
+  }
+  async settle() {
+    if (this.saving || this.recorded) return;
+    this.saving = true;
+    this.broadcast('saving', { status: 'pending' });
+    try {
+      await recordResult(this.roomId, { ...this.w, events: this.events }, this.started);
       this.recorded = true;
-      this.broadcast('result', { matchId: this.roomId });
+      this.broadcast('result', { matchId: this.roomId, saved: true });
       this.clock.setTimeout(() => {
         void this.disconnect();
       }, 60000);
+    } catch {
+      this.retryAt = Date.now() + 3000;
+      this.broadcast('saving', {
+        status: 'retrying',
+        message: 'Saving progress. Please stay connected.',
+      });
+    } finally {
+      this.saving = false;
     }
-    if (this.w.tick % 2 === 0 || this.w.finished) this.broadcast('snapshot', this.w);
   }
 }

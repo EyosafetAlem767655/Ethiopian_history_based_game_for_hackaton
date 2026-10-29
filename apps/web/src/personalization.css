@@ -1,0 +1,142 @@
+.personal-panel {
+  max-width: 1000px;
+  margin: 24px auto;
+  padding: 28px;
+  background: linear-gradient(135deg, #152e2d, #172128);
+  border: 1px solid #b48b4d55;
+  border-radius: 18px;
+  color: #e4dcc6;
+}
+.personal-panel h2 {
+  font: 32px Georgia;
+  color: #f0ce8b;
+  margin: 12px 0;
+}
+.personal-panel p {
+  line-height: 1.7;
+  color: #c9c9bc;
+}
+.personal-panel label {
+  display: block;
+  margin: 12px 0;
+  font-size: 14px;
+}
+.personal-panel select,
+.personal-panel input:not([type='checkbox']) {
+  background: #102021;
+  color: #f4e7cc;
+  padding: 10px;
+  border: 1px solid #9a825e77;
+  border-radius: 6px;
+  max-width: 100%;
+}
+.personal-panel select {
+  display: block;
+  min-width: 125px;
+  margin-top: 7px;
+}
+.personal-panel button {
+  padding: 12px 18px;
+  border: 1px solid #b48b4d88;
+  border-radius: 7px;
+  background: #284037;
+  color: #ffe4ab;
+  margin: 6px;
+}
+.personal-panel button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.avatar-editor {
+  display: flex;
+  align-items: center;
+  gap: 35px;
+}
+.avatar-preview {
+  background: radial-gradient(#6b6a45, #182e2c);
+  border: 1px solid #d7b46955;
+  border-radius: 28px;
+  flex-shrink: 0;
+}
+.avatar-preview canvas {
+  width: 190px;
+  height: 214px;
+  display: block;
+}
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px 18px;
+}
+.feature-grid label {
+  text-transform: capitalize;
+}
+.selfie-preview {
+  display: block;
+  max-height: 250px;
+  max-width: 100%;
+  border-radius: 12px;
+  margin: 15px 0;
+}
+.panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.birth-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.birth-fields input {
+  display: block;
+  width: 110px;
+  margin-top: 7px;
+}
+.review-item {
+  border-top: 1px solid #bca36966;
+  padding: 25px 0;
+}
+.review-item > img {
+  display: block;
+  max-width: 100%;
+  max-height: 450px;
+  object-fit: contain;
+}
+.warming-message {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+  background: #172e2d;
+  border: 1px solid #cba45d;
+  padding: 20px 30px;
+  color: #ffe2a5;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px #0008;
+}
+.audio-settings {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.audio-settings input {
+  width: 100px;
+}
+@media (max-width: 700px) {
+  .avatar-editor {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .feature-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .personal-panel {
+    padding: 18px;
+  }
+  .warming-message {
+    width: 90%;
+  }
+}

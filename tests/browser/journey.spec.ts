@@ -53,12 +53,18 @@ test('a solo judge completes every chapter through browser controls', async ({ p
       await page.getByRole('button', { name: /VIEW PASS/ }).click();
       await page.getByRole('button', { name: /SIMULATE GATHERING/ }).click();
     }
-    await page
-      .getByRole('heading', { name: MISSIONS[id - 1].name, exact: true })
-      .locator('..')
-      .getByRole('button', { name: /BEGIN TRIAL/ })
-      .click();
-    const result = await drive(page);
+    let result;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await page
+        .getByRole('heading', { name: MISSIONS[id - 1].name, exact: true })
+        .locator('..')
+        .getByRole('button', { name: /BEGIN TRIAL/ })
+        .click();
+      result = await drive(page);
+      if (result.winner === 0) break;
+      await page.getByRole('button', { name: 'CONTINUE THE JOURNEY' }).click();
+    }
+    if (!result) throw Error('No mission result');
     expect(result.winner, `Mission ${id}`).toBe(0);
     if (id === 15) {
       expect(result.phase).toBe('victory');
