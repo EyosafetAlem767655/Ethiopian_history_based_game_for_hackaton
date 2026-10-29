@@ -37,6 +37,7 @@ export function postgresSQL(sql: string) {
     'wallet_nonces',
     'avatars',
     'age_reviews',
+    'team_messages',
   ]);
   // A transaction pooler does not guarantee session settings: never depend on search_path.
   value = value.replace(

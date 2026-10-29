@@ -7,6 +7,7 @@ import { Client, type Room } from 'colyseus.js';
 import { control } from './controller';
 import type { World, Mode } from '../packages/shared/src/game';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { parseResult, verifyPayload } from '../packages/shared/src/results';
 const fixturePath = 'output/tests/network-' + randomUUID() + '.sqlite';
 const base = 'http://localhost:2568';
 let process: ChildProcess;
@@ -65,17 +66,61 @@ async function session(name: string) {
 it('verifies wallet ownership once and rejects simulated gathering for normal guests', async () => {
   const s = await session('Wallet Tester'),
     account = privateKeyToAccount(generatePrivateKey()),
-    challenge = await request('/wallet/nonce', s, {});
+    challenge = await request('/wallet/nonce', s, { address: account.address });
   const signature = await account.signMessage({ message: challenge.message });
   const linked = await request('/wallet/bind', s, { address: account.address, signature });
   expect(linked.verified).toBe(true);
+  expect(linked.playerId).toBe(`eip155:84532:${account.address.toLowerCase()}`);
+  expect(linked.registration).toBe('off-chain');
+  expect((await request('/me', s)).wallet.playerId).toBe(linked.playerId);
   await expect(
     request('/wallet/bind', s, { address: account.address, signature }),
   ).rejects.toThrow();
+  await training(s);
+  const result = (await request('/me', s)).history[0],
+    proof = await request('/results/' + result.id + '/proof', s);
+  expect(verifyPayload(proof).status).toBe('match');
+  expect(
+    parseResult(proof.payload).participants.find((p) => p.id === s.profile.id)?.identity,
+  ).toMatchObject({ kind: 'wallet', accountId: linked.playerId });
   const normal = await request('/session', null, { name: 'Normal Guest', demo: false });
   await expect(request('/gathering/demo', normal, { squadId: 'fake' })).rejects.toThrow(
     'demo-only',
   );
+});
+it('rejects competing wallet links and wallet requests from a different website', async () => {
+  const owner = await session('Wallet Owner'),
+    other = await session('Other Player'),
+    wallet = privateKeyToAccount(generatePrivateKey()),
+    a = await request('/wallet/nonce', owner, { address: wallet.address }),
+    b = await request('/wallet/nonce', other, { address: wallet.address });
+  await request('/wallet/bind', owner, {
+    address: wallet.address,
+    signature: await wallet.signMessage({ message: a.message }),
+  });
+  const conflict = await fetch(base + '/api/wallet/bind', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + other.token },
+    body: JSON.stringify({
+      address: wallet.address,
+      signature: await wallet.signMessage({ message: b.message }),
+    }),
+  });
+  expect(conflict.status).toBe(409);
+  expect((await request('/me', owner)).wallet.address).toBe(wallet.address.toLowerCase());
+  expect((await request('/me', other)).wallet.status).toBe('pending');
+  for (const path of ['/wallet/nonce', '/wallet/bind']) {
+    const denied = await fetch(base + '/api' + path, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + owner.token,
+        Origin: 'https://different.example',
+      },
+      body: JSON.stringify({ address: wallet.address }),
+    });
+    expect(denied.status).toBe(403);
+  }
 });
 function play(r: Room, id: string, drive = true) {
   let w: World | undefined,
@@ -151,6 +196,19 @@ it('authenticates two clients, exchanges attacks, records one winner and rejects
     expect(result.winner).toBeGreaterThanOrEqual(0);
     const me = await request('/me', a);
     expect(me.history.filter((h: any) => JSON.parse(h.payload).mode === 'duel')).toHaveLength(1);
+    const record = me.history.find((h: any) => JSON.parse(h.payload).mode === 'duel'),
+      proof = await request('/results/' + record.id + '/proof', a);
+    expect(verifyPayload(proof).status).toBe('match');
+    expect(proof.simulated).toBe(true);
+    expect(proof.chain).toBeNull();
+    expect((await request('/results/' + record.id + '/proof', b)).hash).toBe(proof.hash);
+    const stranger = await session('Proof Stranger');
+    for (const token of [stranger.token, '']) {
+      const denied = await fetch(base + '/api/results/' + record.id + '/proof', {
+        headers: { Authorization: 'Bearer ' + token },
+      });
+      expect(denied.status).toBe(token ? 404 : 401);
+    }
     const other = await p2.done;
     expect(other.winner).toBe(result.winner);
   } finally {

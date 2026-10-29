@@ -8,6 +8,8 @@ import QRCode from 'qrcode';
 import { useUI, api, saveSession, API, connection, wakeServer } from './store';
 import { requestJSON } from './services/http';
 import { CampaignScreen } from './CampaignScreen';
+import { MatchRecord } from './MatchRecord';
+import { TeamChat } from './TeamChat';
 import { ScrollGuide } from './ScrollGuide';
 import { audio } from './audio';
 import { MISSIONS } from '../../../packages/shared/src/missions';
@@ -104,6 +106,10 @@ function App() {
       }
     }
   }
+  useEffect(() => {
+    if (!session) setSquad(null);
+    else if (me?.profile?.id === session.profile.id) setSquad(me.squad ?? null);
+  }, [me, session?.profile.id]);
   useEffect(() => {
     void refresh();
     const pass = new URLSearchParams(location.search).get('pass');
@@ -290,7 +296,8 @@ function App() {
   const nav = [
     ['home', '⌂', 'The kingdom'],
     ['journey', '◇', 'Your journey'],
-    ['arena', '⚔', 'Royal arena'],
+    ['arena', '⚔', 'Battle arena'],
+    ['squad', '☏', 'Team room'],
     ['heroes', '♜', 'Warriors'],
     ['leaderboard', '♛', 'Hall of legends'],
     ['profile', '◈', 'Your legacy'],
@@ -298,6 +305,11 @@ function App() {
     ['age', '◇', 'Adult matchmaking'],
   ];
   function navigate(id: string) {
+    if (id === 'squad') {
+      if (session) void getSquad();
+      else setPage('identity');
+      return;
+    }
     if (['personalize', 'age', 'review'].includes(id) && !session) {
       setPage('identity');
       return;
@@ -366,8 +378,8 @@ function App() {
             </div>
             <div className="top-right">
               <span className="network">
-                <i /> BASE SEPOLIA{' '}
-                <em>{me?.history?.[0]?.status === 'confirmed' ? 'LIVE' : 'SIMULATED'}</em>
+                <i /> PROFILE{' '}
+                <em>{me?.wallet?.status === 'verified' ? 'WALLET LINKED' : 'WALLET NOT LINKED'}</em>
               </span>
               <button
                 className="sound"
@@ -637,7 +649,7 @@ function App() {
                 <div className="section-title">
                   <div>
                     <span className="eyebrow">WELCOME, {session.profile.name.toUpperCase()}</span>
-                    <h1>Your road to the throne.</h1>
+                    <h1>Battle Arena</h1>
                     <p className="subtle">
                       {me?.age?.band
                         ? `Human matchmaking · reviewed adults ${me.age.band}`
@@ -653,9 +665,8 @@ function App() {
                   <div>
                     <h2>{heroes[hero].name}</h2>
                     <p>
-                      {isDemo
-                        ? 'A complete adventure. Real combat. Your legend in three chapters.'
-                        : 'Ten qualifying victories open the path to the Four Banners.'}
+                      Fight a 1v1 duel or gather a team for 4v4 Banner Conquest. Story missions are
+                      under Your journey.
                     </p>
                     <span className="eyebrow">
                       {progress?.xp ?? 0} LIFETIME XP <span className="divider">/</span>{' '}
@@ -686,7 +697,7 @@ function App() {
                       <span className="eyebrow">
                         {progress?.qualifying ?? 0} / {isDemo ? 1 : 10} QUALIFYING VICTORIES
                       </span>
-                      <h2>The Warrior’s Trial</h2>
+                      <h2>1v1 Duel Arena</h2>
                       <p>
                         A 75-second duel. A human rival, or a worthy AI opponent after five seconds.
                       </p>
@@ -698,20 +709,17 @@ function App() {
                     >
                       ENTER ARENA ⚔
                     </button>
+                    {!progress?.tutorial && <small>Complete training above to unlock duels.</small>}
                   </article>
-                  <article className={(progress?.stage ?? 1) < 2 ? 'locked' : ''}>
+                  <article>
                     <div className="step-number">02</div>
                     <div>
                       <span className="eyebrow">{progress?.squadRating ?? 1000} SQUAD RATING</span>
-                      <h2>The Four Banners</h2>
+                      <h2>4v4 Team Arena</h2>
                       <p>Gather your squad. Capture the banners. Earn your Royal Lunch Pass.</p>
                     </div>
-                    <button
-                      className="outline-btn"
-                      disabled={busy || (progress?.stage ?? 1) < 2}
-                      onClick={() => getSquad()}
-                    >
-                      FORM A SQUAD →
+                    <button className="outline-btn" disabled={busy} onClick={() => getSquad()}>
+                      OPEN TEAM ROOM →
                     </button>
                   </article>
                   <article className={(progress?.stage ?? 1) < 3 ? 'locked' : ''}>
@@ -738,13 +746,24 @@ function App() {
           <section className="content-page">
             <div className="section-title">
               <div>
-                <span className="eyebrow">FOUR WARRIORS. ONE PURPOSE.</span>
+                <span className="eyebrow">TEAM ROOM · CHAT, INVITE, READY UP</span>
                 <h1>{squad?.name ?? 'The Four Banners'}</h1>
               </div>
               <span className="invite-code">
                 INVITE CODE <b>{squad?.code}</b>
               </span>
             </div>
+            <div className="team-room-guide">
+              <p>
+                Share the six-character code with a teammate. They can open Team room and join using
+                it. Invited members must meet the reviewed-adult team rules. Chat does not require
+                training or a wallet; battle qualification is separate.
+              </p>
+              <button className="outline-btn" onClick={() => setPage('arena')}>
+                GO TO BATTLE ARENA →
+              </button>
+            </div>
+            <div id="team-chat-slot" />
             <div className="squad-slots">
               {[0, 1, 2, 3].map((n) => (
                 <div className="squad-slot" key={n}>
@@ -776,13 +795,20 @@ function App() {
               </div>
               <button
                 className="gold-btn"
-                disabled={busy}
+                disabled={busy || (progress?.stage ?? 1) < 2}
                 onClick={() => window.dispatchEvent(new Event('knights-ready'))}
               >
                 READY · BANNER CONQUEST <span>⚑</span>
               </button>
             </div>
-            <SquadChat squad={squad} onStart={() => start('squad')} />
+            <SquadReadiness squad={squad} onStart={() => start('squad')} />
+            {(progress?.stage ?? 1) < 2 && (
+              <p className="subtle">
+                Team chat is open. To unlock 4v4 battles, complete training and earn{' '}
+                {isDemo ? 'one qualifying duel win' : 'ten qualifying duel wins'}. Your team members
+                must each qualify.
+              </p>
+            )}
             <div className="lunch-pass">
               <div>
                 <span className="eyebrow">THE ROYAL GATHERING</span>
@@ -957,6 +983,15 @@ function App() {
                   </span>
                 </div>
                 <WalletPanel onLinked={refresh} />
+                <p className="profile-identity">
+                  Game profile ID: <code>{session.profile.id}</code>
+                  <br />
+                  Wallet link:{' '}
+                  {me?.wallet?.status === 'verified'
+                    ? 'Verified signature · saved in the game database'
+                    : 'Not linked'}{' '}
+                  · On-chain profile registration: not implemented.
+                </p>
                 <div className="stats-row">
                   {[
                     ['LIFETIME XP', progress?.xp],
@@ -988,48 +1023,9 @@ function App() {
                 </div>
                 <h2 className="spaced">Battle chronicles</h2>
                 <div className="history-list">
-                  {me?.history?.map((r: any) => {
-                    const p = JSON.parse(r.payload);
-                    return (
-                      <details key={r.id}>
-                        <summary>
-                          <span>
-                            {p.mode.toUpperCase()}{' '}
-                            <small>{new Date(r.created).toLocaleString()}</small>
-                          </span>
-                          <span className="status">{r.status.toUpperCase()}</span>
-                        </summary>
-                        {r.tx && (
-                          <a
-                            className="explorer-link"
-                            href={'https://sepolia.basescan.org/tx/' + r.tx}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            View confirmed transaction ↗
-                          </a>
-                        )}
-                        <p className="hash">
-                          KECCAK-256
-                          <br />
-                          {r.hash}
-                        </p>
-                        <p className="subtle">
-                          A hash verifies the recorded payload’s integrity. A simulated submission
-                          has no blockchain transaction.
-                        </p>
-                        <div className="timeline">
-                          {p.events
-                            ?.filter((e: any) => ['defeat', 'artifact', 'pillar'].includes(e.kind))
-                            .map((e: any, i: number) => (
-                              <div key={i}>
-                                <b>{(e.tick / 30).toFixed(1)}s</b> {e.kind} {e.text ?? ''}
-                              </div>
-                            ))}
-                        </div>
-                      </details>
-                    );
-                  })}
+                  {me?.history?.map((r: any) => (
+                    <MatchRecord key={r.id} record={r} />
+                  ))}
                 </div>
                 {isDemo && (
                   <button
@@ -1099,6 +1095,31 @@ function App() {
                   : 'CONNECTING'}
               </div>
               <span className="demo-tag">{isDemo ? 'STORY DEMO' : 'LIVE ARENA'}</span>
+            </div>
+            <div className="arena-room-banner" role="status">
+              <strong>
+                {snapshot?.campaign
+                  ? 'STORY MISSION'
+                  : snapshot?.mode === 'squad'
+                    ? '4V4 TEAM ARENA'
+                    : snapshot?.mode === 'duel'
+                      ? '1V1 DUEL ARENA'
+                      : 'TRAINING ARENA'}
+              </strong>
+              <span>
+                {waiting > 0
+                  ? 'MATCHMAKING · WAITING FOR PLAYERS'
+                  : snapshot?.finished
+                    ? 'MATCH FINISHED'
+                    : 'CONNECTED TO ARENA'}
+              </span>
+              <span>Room: {room?.roomId ?? 'Connecting…'}</span>
+              <span>
+                {snapshot?.players.filter((p) => p.kind === 'warrior' && !p.bot).length ?? 0}{' '}
+                human-controlled ·{' '}
+                {snapshot?.players.filter((p) => p.kind === 'warrior' && p.bot).length ?? 0}{' '}
+                AI-controlled
+              </span>
             </div>
             <ScrollGuide
               id={
@@ -1265,7 +1286,7 @@ function App() {
                     </div>
                     <span className="verification">
                       {resultSaved
-                        ? '◈ RESULT SAVED · CHECK HISTORY FOR ANCHOR STATUS'
+                        ? '◈ SERVER RESULT SAVED · VERIFY IN YOUR LEGACY'
                         : 'SAVING RESULT… PLEASE STAY CONNECTED'}
                     </span>
                     <button className="gold-btn" disabled={!resultSaved} onClick={exit}>
@@ -1355,6 +1376,19 @@ function App() {
           </div>
         )}
       </main>
+      {session && squad && (
+        <TeamChat
+          key={session.profile.id + ':' + squad.id}
+          squad={squad}
+          page={page}
+          onRoster={(members) =>
+            setSquad((current: any) =>
+              current?.id === squad.id ? { ...current, members } : current,
+            )
+          }
+          onMembershipChanged={() => void refresh()}
+        />
+      )}
       {busy && (
         <div className="busy-indicator">
           CONNECTING TO AKSUMARA <span>◆</span>
@@ -1375,10 +1409,8 @@ function Gate({ onPlay }: { onPlay: () => void }) {
     </div>
   );
 }
-function SquadChat({ squad, onStart }: { squad: any; onStart: () => Promise<void> }) {
+function SquadReadiness({ squad, onStart }: { squad: any; onStart: () => Promise<void> }) {
   const [members, setMembers] = useState<any[]>([]),
-    [messages, setMessages] = useState<any[]>([]),
-    [text, setText] = useState(''),
     [connected, setConnected] = useState(false);
   const lobby = useRef<Room | null>(null);
   const session = useUI((s) => s.session);
@@ -1405,7 +1437,7 @@ function SquadChat({ squad, onStart }: { squad: any; onStart: () => Promise<void
         lobby.current = r;
         setConnected(true);
         r.onMessage('members', setMembers);
-        r.onMessage('chat', (m) => setMessages((old) => [...old.slice(-19), m]));
+        r.onMessage('chat', () => {});
         r.onMessage('start', () => {
           void onStart();
         });
@@ -1422,7 +1454,7 @@ function SquadChat({ squad, onStart }: { squad: any; onStart: () => Promise<void
   return (
     <div className="squad-chat">
       <div>
-        <span className="eyebrow">SQUAD LOBBY · {connected ? 'CONNECTED' : 'CONNECTING'}</span>
+        <span className="eyebrow">BATTLE READINESS · {connected ? 'CONNECTED' : 'CONNECTING'}</span>
         <p>
           {members.length
             ? members.map((m) => m.name + (m.ready ? ' ✓ READY' : ' · NOT READY')).join(' / ')
@@ -1432,36 +1464,6 @@ function SquadChat({ squad, onStart }: { squad: any; onStart: () => Promise<void
           All connected human members must ready up. Empty battlefield slots use labeled server AI.
         </small>
       </div>
-      <div className="chat-log">
-        {messages.map((m, i) => (
-          <p key={i}>
-            <time>
-              {new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </time>{' '}
-            <b>{m.name}:</b> {m.text}
-          </p>
-        ))}
-      </div>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (text.trim()) {
-            lobby.current?.send('chat', text.trim());
-            setText('');
-          }
-        }}
-      >
-        <input
-          aria-label="Squad lobby message"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          maxLength={200}
-          placeholder="Speak with your squad…"
-        />
-        <button disabled={!connected || !text.trim()} className="outline-btn">
-          SEND
-        </button>
-      </form>
     </div>
   );
 }
@@ -1699,6 +1701,12 @@ function WalletPanel({ onLinked }: { onLinked: () => Promise<void> }) {
       <div>
         <span className="eyebrow">CRYPTOGRAPHIC WALLET IDENTITY</span>
         <p>{me?.wallet?.address ?? 'Wallet pending. Guest identity is stored independently.'}</p>
+        {me?.wallet?.playerId && <p>Wallet player ID: {me.wallet.playerId}</p>}
+        <p>
+          {me?.wallet?.address
+            ? 'Wallet ownership verified. Your profile link is stored off-chain.'
+            : 'Sign a message to prove wallet ownership. Linking does not spend funds or send a blockchain transaction.'}
+        </p>
         {me?.wallet?.address && (
           <a
             target="_blank"
@@ -1720,8 +1728,11 @@ function WalletPanel({ onLinked }: { onLinked: () => Promise<void> }) {
               throw Error(
                 'Install a compatible browser wallet to link an address. Embedded-wallet onboarding is not configured.',
               );
-            const [address] = await eth.request({ method: 'eth_requestAccounts' }),
-              challenge = await api('/wallet/nonce', {});
+            const accounts = await eth.request({ method: 'eth_requestAccounts' });
+            const address = accounts?.[0];
+            if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address))
+              throw Error('Select a wallet account before linking.');
+            const challenge = await api('/wallet/nonce', { address });
             const bytes = new TextEncoder().encode(challenge.message);
             const message =
               '0x' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -1741,7 +1752,7 @@ function WalletPanel({ onLinked }: { onLinked: () => Promise<void> }) {
         {loading
           ? 'AWAITING SIGNATURE...'
           : me?.wallet?.address
-            ? 'VERIFY ANOTHER WALLET'
+            ? 'VERIFY LINKED WALLET'
             : 'LINK YOUR WALLET'}
       </button>
     </div>

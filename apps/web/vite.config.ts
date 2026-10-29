@@ -4,7 +4,7 @@ export default defineConfig({
   plugins: [tailwindcss()],
   // Prebundle optional worker dependencies before play: discovering them during camera capture reloads Vite.
   optimizeDeps: { include: ['@mediapipe/tasks-vision', 'tesseract.js'] },
-  server: { port: 5173, proxy: { '/api': 'http://localhost:2567' } },
+  server: { port: 5173, strictPort: true, proxy: { '/api': 'http://localhost:2567' } },
   build: {
     outDir: 'dist',
     emptyOutDir: true,

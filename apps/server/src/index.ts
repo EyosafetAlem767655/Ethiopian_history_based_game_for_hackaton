@@ -12,9 +12,18 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server } from '@colyseus/core';
-import { WebSocketTransport } from '@colyseus/ws-transport';
+import { SharedGameTransport } from './transport';
+import { currentSquad, registerTeamChat } from './chat';
+import { resultProof } from './result-proof';
 import { z } from 'zod';
-import { verifyMessage } from 'viem';
+import type { Address, Hex } from 'viem';
+import {
+  bindWallet,
+  checkWalletOrigin,
+  issueWalletChallenge,
+  walletIdentity,
+  WalletLinkError,
+} from './wallet';
 import { registerHostedRoutes, exchangeHosted, isHosted, syncHosted } from './hosted';
 import { BaseAttestation, processOutbox } from './attestation';
 import { BattleRoom } from './room';
@@ -132,63 +141,50 @@ app.use('/api', async (q, r, next) => {
 });
 app.get('/api/me', async (_q, r) => {
   const p = (await profile(r.locals.player.id))!;
-  const wallet = (await db
-    .prepare('SELECT address FROM wallets WHERE player_id=?')
-    .get(p.id)) as any;
   r.json({
     profile: p,
     identity: (await isHosted(p.id)) ? 'supabase' : 'local-guest',
     badges: await badges(p.id),
     history: await history(p.id),
-    wallet: wallet
-      ? { status: 'verified', address: wallet.address }
-      : { status: 'pending', label: 'Wallet not connected' },
+    wallet: await walletIdentity(p.id),
     campaign: await campaignProgress(p.id),
+    squad: await currentSquad(p.id, p.demo),
     avatar: await readAvatar(p.id),
     age: await eligibility(p.id),
   });
 });
-app.post('/api/wallet/nonce', async (_q, r) => {
-  const nonce = `Ethiopian Knights wallet binding\nPlayer: ${r.locals.player.id}\nNonce: ${randomUUID()}\nThis signature links your wallet. It does not authorize transactions.`;
-  await db
-    .prepare('INSERT OR REPLACE INTO wallet_nonces VALUES (?,?,?)')
-    .run(r.locals.player.id, nonce, Date.now() + 300000);
-  r.json({ message: nonce });
+app.get('/api/results/:id/proof', async (q, r) => {
+  const proof = await resultProof(q.params.id, r.locals.player.id);
+  if (!proof) {
+    r.status(404).json({ error: 'Result not found in your match history' });
+    return;
+  }
+  r.json(proof);
+});
+app.post('/api/wallet/nonce', async (q, r) => {
+  try {
+    checkWalletOrigin(q.headers.origin);
+    const { address } = z
+      .object({ address: z.string().regex(/^0x[0-9a-fA-F]{40}$/) })
+      .parse(q.body);
+    r.json(await issueWalletChallenge(r.locals.player.id, address as Address));
+  } catch (e) {
+    r.status(e instanceof WalletLinkError ? e.status : 400).json({ error: (e as Error).message });
+  }
 });
 app.post('/api/wallet/bind', async (q, r) => {
   try {
+    checkWalletOrigin(q.headers.origin);
     const { address, signature } = z
       .object({
         address: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
         signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
       })
       .parse(q.body);
-    const row = (await db
-      .prepare('SELECT * FROM wallet_nonces WHERE player_id=?')
-      .get(r.locals.player.id)) as any;
-    if (!row || row.expires < Date.now()) throw Error('Request a fresh signing challenge');
-    if (
-      !(await verifyMessage({
-        address: address as `0x${string}`,
-        message: row.nonce,
-        signature: signature as `0x${string}`,
-      }))
-    )
-      throw Error('Wallet signature invalid');
-    await db.transaction(async () => {
-      const fresh = await db
-        .prepare('SELECT * FROM wallet_nonces WHERE player_id=?')
-        .get(r.locals.player.id);
-      if (!fresh || fresh.nonce !== row.nonce || Number(fresh.expires) < Date.now())
-        throw Error('Request a fresh signing challenge');
-      await db
-        .prepare('INSERT OR REPLACE INTO wallets VALUES (?,?)')
-        .run(r.locals.player.id, address.toLowerCase());
-      await db.prepare('DELETE FROM wallet_nonces WHERE player_id=?').run(r.locals.player.id);
-    })();
-    r.json({ verified: true, address });
+    const wallet = await bindWallet(r.locals.player.id, address as Address, signature as Hex);
+    r.json({ verified: true, ...wallet });
   } catch (e) {
-    r.status(400).json({ error: (e as Error).message });
+    r.status(e instanceof WalletLinkError ? e.status : 400).json({ error: (e as Error).message });
   }
 });
 registerHostedRoutes(app);
@@ -362,7 +358,8 @@ app.use((err: Error, _q: express.Request, r: express.Response, _n: express.NextF
   });
 });
 const http = createServer(app);
-const server = new Server({ transport: new WebSocketTransport({ server: http }) });
+const server = new Server({ transport: new SharedGameTransport(http) });
+registerTeamChat(http);
 server.define('battle', BattleRoom).filterBy(['mode', 'demo', 'squadId', 'ageBand']);
 server.define('conquest', BattleRoom, { mode: 'squad' }).filterBy(['demo', 'ageBand']);
 server.define('quest', BattleRoom, { mode: 'quest' }).filterBy(['demo', 'squadId', 'ageBand']);

@@ -8,7 +8,14 @@ import {
   type CampaignProgress,
 } from '../../../packages/shared/src/missions';
 import { randomUUID, createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
-import { keccak256, stringToHex } from 'viem';
+import {
+  canonical,
+  digest,
+  resultChainId,
+  walletAccountId,
+  type ResultIdentity,
+} from '../../../packages/shared/src/results';
+export { canonical, digest } from '../../../packages/shared/src/results';
 import {
   freshProgress,
   progressResult,
@@ -17,6 +24,8 @@ import {
 } from '../../../packages/shared/src/game';
 await db.exec(`CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY,name TEXT NOT NULL,demo INTEGER NOT NULL,hero INTEGER NOT NULL DEFAULT 0,progress TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS wallets(player_id TEXT PRIMARY KEY,address TEXT UNIQUE NOT NULL);
+CREATE TABLE IF NOT EXISTS wallet_nonces(player_id TEXT PRIMARY KEY,nonce TEXT NOT NULL,expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS results (id TEXT PRIMARY KEY,demo INTEGER NOT NULL,payload TEXT NOT NULL,hash TEXT NOT NULL,created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS participants (match_id TEXT NOT NULL,player_id TEXT NOT NULL,PRIMARY KEY(match_id,player_id));
 CREATE TABLE IF NOT EXISTS badges (player_id TEXT NOT NULL,badge TEXT NOT NULL,match_id TEXT NOT NULL,PRIMARY KEY(player_id,badge));
@@ -143,21 +152,20 @@ export async function authenticate(t: unknown) {
   if (data.exp < Date.now() || !p) throw new SessionError('Session expired');
   return p;
 }
-export function canonical(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']';
-  return (
-    '{' +
-    Object.entries(value as Record<string, unknown>)
-      .filter(([, v]) => v !== undefined)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => JSON.stringify(k) + ':' + canonical(v))
-      .join(',') +
-    '}'
-  );
-}
-export function digest(value: unknown) {
-  return keccak256(stringToHex(canonical(value)));
+async function resultIdentity(id: string): Promise<ResultIdentity> {
+  // A disconnected player's AI substitute still belongs to the human profile.
+  if (!(await profile(id))) return { kind: 'bot' };
+  const wallet = (await db.prepare('SELECT address FROM wallets WHERE player_id=?').get(id)) as
+    | { address: string }
+    | undefined;
+  return wallet
+    ? {
+        kind: 'wallet',
+        address: wallet.address,
+        chainId: resultChainId,
+        accountId: walletAccountId(wallet.address),
+      }
+    : { kind: 'profile' };
 }
 export const issueBadge = async (id: string, badge: string, match: string) =>
   await db.prepare('INSERT OR IGNORE INTO badges VALUES (?,?,?)').run(id, badge, match);
@@ -165,7 +173,7 @@ export function recordResult(id: string, w: World, started: string) {
   return db.transaction(async () => {
     if (await db.prepare('SELECT id FROM results WHERE id=?').get(id)) return false;
     const payload = {
-      version: w.campaign ? 2 : 1,
+      version: 3,
       ...(w.campaign
         ? {
             missionId: w.campaign.missionId,
@@ -184,15 +192,19 @@ export function recordResult(id: string, w: World, started: string) {
             ? 2
             : 1,
       demo: w.demo,
-      participants: w.players.map((p) => ({
-        id: p.id,
-        bot: p.bot,
-        team: p.team,
-        damage: p.damage,
-        kills: p.kills,
-        contribution: p.contribution,
-        ...(w.campaign ? { honor: p.honor ?? 0 } : {}),
-      })),
+      participants: await Promise.all(
+        w.players.map(async (p) => ({
+          id: p.id,
+          name: p.name,
+          identity: await resultIdentity(p.id),
+          bot: p.bot,
+          team: p.team,
+          damage: p.damage,
+          kills: p.kills,
+          contribution: p.contribution,
+          ...(w.campaign ? { honor: p.honor ?? 0 } : {}),
+        })),
+      ),
       winner: w.winner,
       scoreline: w.scores,
       startedAt: started,

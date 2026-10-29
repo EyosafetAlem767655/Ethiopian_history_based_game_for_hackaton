@@ -1,5 +1,7 @@
 # Deploy ክብረ ጉግስ: free Render + free Supabase
 
+Team chat uses Socket.IO on the same backend origin and port as Colyseus. Route `/socket.io/` polling and WebSocket upgrades to that backend. Apply migration `005_team_chat.sql` after the existing migrations. Set `WALLET_ORIGIN` to the actual frontend origin (including a same-origin Render frontend), and include separate frontend origins in `CORS_ORIGINS`. No separate chat service/key is required. Verify gameplay and chat with two devices and a reconnect after deployment.
+
 One Render web service builds the web app and serves it together with the API and Colyseus WebSocket from the same origin. Supabase Postgres holds authoritative records, auth and private storage. SQLite is for local development. No Vercel, Railway, Neon or persistent disk is required.
 
 **Quick path for a new deployment:**
@@ -28,7 +30,7 @@ Self-hosted vision runtime/model/OCR files and licenses are included under apps/
 
 ## 2. Apply only pending Supabase migrations
 
-In the existing project's SQL editor apply 002_campaign.sql if still pending, then 003_runtime.sql and 004_evidence_cleanup.sql. For CLI-managed installations inspect supabase migration list first. Do not rerun 001, delete the project or use supabase db reset on production.
+In the existing project's SQL editor apply 002_campaign.sql if still pending, then 003_runtime.sql, 004_evidence_cleanup.sql and 005_team_chat.sql. For CLI-managed installations inspect supabase migration list first. Do not rerun 001, delete the project or use supabase db reset on production.
 
 003 adds a private game_runtime schema and copies existing hosted records without overwriting runtime rows. Existing public tables remain as legacy records; all new game writes/reads use game_runtime. Do not expose this schema in the Data API. Canonical game IDs remain distinct from linked Supabase auth IDs. Distinct accounts are not automatically merged.
 
@@ -60,13 +62,14 @@ Push the reviewed source and assets to your repository. In Render choose New →
 | VITE_SUPABASE_URL                                | Existing project URL (public; baked into the web build)                       |
 | VITE_SUPABASE_PUBLISHABLE_KEY                    | Frontend-safe publishable/anon key, never the service key                     |
 | CORS_ORIGINS                                     | Unset for the single service; only for a separate frontend origin             |
+| WALLET_ORIGIN                                    | Exact frontend origin used in ownership signatures                            |
 | ENABLE_DEMO                                      | true                                                                          |
 | ALLOW_CHAIN_BROADCAST                            | false until separately authorized                                             |
 | AGE_REVIEWER_IDS                                 | Leave unset until cleanup and reviewer setup are verified                     |
 
 The server connects to Postgres with full TLS certificate verification. Supabase signs its database and pooler certificates with its own root CA, which Node does not trust by default, so without SUPABASE_DB_CA startup fails with `SELF_SIGNED_CERT_IN_CHAIN` and the health check never passes. Download the certificate from Supabase Dashboard → Project Settings → Database → SSL Configuration and paste the whole PEM, including the BEGIN/END lines, as the value. Escaped `\n` newlines are accepted. The same variable is used by scripts/import-sqlite.ts.
 
-The Docker build runs `pnpm build` and Render passes the service's environment variables to it as build arguments, so VITE_SUPABASE_* changes require a redeploy (Manual Deploy → Deploy latest commit). If you do host a separate frontend, set CORS_ORIGINS to its exact https origins with no path or trailing slash; production startup refuses anything else.
+The Docker build runs `pnpm build` and Render passes the service's environment variables to it as build arguments, so VITE*SUPABASE*\* changes require a redeploy (Manual Deploy → Deploy latest commit). If you do host a separate frontend, set CORS_ORIGINS to its exact https origins with no path or trailing slash; production startup refuses anything else.
 
 Render supplies PORT. Copy the service's actual domain. If it is kibre-gugs-server-EXAMPLE.onrender.com, the API origin is https://kibre-gugs-server-EXAMPLE.onrender.com and WebSocket origin is wss://kibre-gugs-server-EXAMPLE.onrender.com. Replace the example domain. Append no /api or /matchmake to these environment values.
 
@@ -90,7 +93,7 @@ Under Authentication → URL Configuration:
 
 Keep email authentication enabled. Add only intentional preview redirects. A guest remains a guest; selecting an authenticated account does not silently merge a different guest's progress.
 
-Main link is the render one, vercel is depreciated. 
+Main link is the render one, vercel is deprecated.
 
 ## 7. Optional: host the frontend on Vercel instead
 

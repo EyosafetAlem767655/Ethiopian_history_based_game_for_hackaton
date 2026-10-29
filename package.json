@@ -6,7 +6,7 @@
   },
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"pnpm dev:server\" \"pnpm dev:web\"",
+    "dev": "concurrently -k \"npm run dev:server\" \"npm run dev:web\"",
     "dev:server": "tsx watch apps/server/src/index.ts",
     "dev:web": "vite --host 0.0.0.0 apps/web",
     "build": "vite build apps/web",
@@ -35,6 +35,8 @@
     "qrcode": "^1.5.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4",
     "tesseract.js": "^7.0.0",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3",

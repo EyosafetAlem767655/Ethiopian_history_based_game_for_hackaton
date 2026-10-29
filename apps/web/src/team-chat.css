@@ -1,0 +1,143 @@
+.team-chat-panel {
+  border: 1px solid #627557;
+  border-radius: 8px;
+  background: #112329;
+  color: #e5dfcc;
+  overflow: hidden;
+  box-shadow: 0 12px 35px #0005;
+}
+.team-chat-inline {
+  margin: 22px 0;
+}
+.team-chat-floating {
+  position: fixed;
+  right: 20px;
+  bottom: 105px;
+  z-index: 45;
+  width: min(370px, calc(100vw - 28px));
+}
+.team-chat-heading {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  padding: 13px 16px;
+  color: #e6cc8e;
+  background: #1e3538;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  letter-spacing: 1px;
+}
+.team-chat-heading small {
+  display: block;
+  color: #a9c5ad;
+  margin-top: 3px;
+  letter-spacing: 0.6px;
+}
+.team-chat-body {
+  padding: 16px;
+}
+.team-chat-body p {
+  font-size: 12px;
+}
+.team-chat-presence {
+  color: #b9d9bd;
+  margin-top: 8px;
+}
+.team-chat-messages {
+  height: 225px;
+  max-height: 30dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 14px 0;
+  background: #0b191f;
+  padding: 12px;
+  border-radius: 5px;
+}
+.team-chat-messages > div {
+  padding: 8px 10px;
+  margin-bottom: 9px;
+  background: #192d35;
+  border-left: 2px solid #657e71;
+  overflow-wrap: anywhere;
+}
+.team-chat-messages .my-message {
+  border-left-color: #c9a95f;
+}
+.team-chat-messages strong {
+  color: #e5cd92;
+}
+.team-chat-messages time {
+  float: right;
+  font-size: 10px;
+  color: #9caeae;
+}
+.team-chat-body form label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.team-chat-body form > div {
+  display: flex;
+  gap: 8px;
+}
+.team-chat-body input {
+  min-width: 0;
+  flex: 1;
+  width: 100%;
+  padding: 11px;
+  font-size: 13px;
+}
+.team-chat-body .outline-btn {
+  padding: 10px 12px;
+  font-size: 11px;
+}
+.team-chat-body [role='alert'] {
+  color: #f1a995;
+  margin-top: 8px;
+}
+.team-chat-body small {
+  display: block;
+  margin-top: 10px;
+}
+.team-room-guide {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.team-room-guide p {
+  max-width: 670px;
+  font-size: 13px;
+}
+.profile-identity {
+  margin-top: 18px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.arena-room-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  padding: 9px 14px;
+  border: 1px solid #51684e;
+  border-radius: 5px;
+  background: #152f2e;
+  font-size: 12px;
+  color: #d9deca;
+}
+@media (max-width: 700px) {
+  .team-chat-floating {
+    right: 10px;
+    bottom: 95px;
+  }
+  .team-room-guide {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .team-chat-body {
+    padding: 12px;
+  }
+}

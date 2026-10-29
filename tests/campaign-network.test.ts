@@ -142,6 +142,6 @@ it('shares an authoritative mission, rejects claims/versions/outsiders, reconnec
   const history = (await api('/me', a)).history,
     payload = JSON.parse(history[0].payload);
   expect(payload.missionId).toBe(1);
-  expect(payload.version).toBe(2);
+  expect(payload.version).toBe(3);
   expect(history[0].hash).toMatch(/^0x[0-9a-f]{64}$/);
 }, 100000);

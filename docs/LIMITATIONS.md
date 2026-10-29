@@ -9,3 +9,7 @@
 - Evidence is deleted after decisions/withdrawal. Unreviewed submissions expire after 24 hours and are deleted on the next successful hourly cleanup. Outages can delay physical deletion; failed deletes remain queued. Verify cleanup before accepting real documents. Approved birth dates remain private until withdrawal.
 - Quiet ambient music is an original synthesized score, not a licensed recording or authenticated traditional performance. Flame trails are cosmetic.
 - Public hosting, genuine account/review/gathering flows and live Base Sepolia require owner configuration. Synthetic/local fixtures do not verify live integrations. See DEPLOYMENT.md and VALIDATION.md.
+
+- Wallet signatures link an off-chain profile to a stable wallet account ID; no on-chain profile registry or wallet-based login/recovery is implemented. Versioned match identities and independent proof verification are implemented; live public-testnet acceptance remains unverified.
+- Private team chat now uses Socket.IO with persisted SQLite/Postgres history, presence and deduplicated retries. Team invitations retain the existing reviewed-adult eligibility rules. Apply migration 005 before hosting these changes.
+- On-chain badge delivery, spectators, full match playback, tournament brackets/rewards, friend requests/direct invitations and broader activity notifications remain unimplemented. Existing off-chain achievements, team invite codes and chat unread counts do not provide those complete flows.

@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiError, endpoints, readResponse, requestJSON } from '../apps/web/src/services/http';
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 it('reads JSON and preserves backend errors and diagnostic references', async () => {
   expect(
     await readResponse(
@@ -59,6 +62,17 @@ it('times out a stalled server and distinguishes network failures', async () => 
   vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline')));
   await expect(requestJSON('https://example.test')).rejects.toBeInstanceOf(ApiError);
 });
+it('gives startup instructions for an unreachable local API only', async () => {
+  vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline')));
+  await expect(requestJSON('/api/session')).rejects.toMatchObject({
+    code: 'NETWORK_ERROR',
+    message: expect.stringContaining('npm run dev'),
+  });
+  await expect(requestJSON('https://example.test/api/session')).rejects.toMatchObject({
+    code: 'NETWORK_ERROR',
+    message: expect.not.stringContaining('npm run dev'),
+  });
+});
 import { readFileSync } from 'node:fs';
 it('keeps vision models and APIs outside the Vercel SPA fallback', () => {
   const config = JSON.parse(readFileSync('vercel.json', 'utf8'));
@@ -72,4 +86,13 @@ it('keeps vision models and APIs outside the Vercel SPA fallback', () => {
   ])
     expect(fallback.test(path)).toBe(false);
   expect(fallback.test('/journey')).toBe(true);
+});
+
+it('keeps production same-origin failures free of local startup instructions', async () => {
+  vi.stubEnv('DEV', false);
+  vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline')));
+  await expect(requestJSON('/api/session')).rejects.toMatchObject({
+    code: 'NETWORK_ERROR',
+    message: expect.not.stringContaining('npm run dev'),
+  });
 });
