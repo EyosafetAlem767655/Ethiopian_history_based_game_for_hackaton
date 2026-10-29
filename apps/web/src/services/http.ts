@@ -121,7 +121,9 @@ export async function requestJSON<T = any>(
     throw new ApiError(
       controller.signal.aborted
         ? 'The game server took too long to respond. Please retry.'
-        : 'Cannot reach the game server. Check your connection and backend address.',
+        : /^\/api(?:\/|$)/.test(url)
+          ? 'The local game server is not reachable. Run npm run dev in the project folder, keep that terminal open, then refresh this page.'
+          : 'Cannot reach the game server. Check your connection and backend address.',
       0,
       controller.signal.aborted ? 'TIMEOUT' : 'NETWORK_ERROR',
     );

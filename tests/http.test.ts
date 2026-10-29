@@ -55,3 +55,14 @@ it('times out a stalled server and distinguishes network failures', async () => 
   vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline')));
   await expect(requestJSON('https://example.test')).rejects.toBeInstanceOf(ApiError);
 });
+it('gives startup instructions for an unreachable local API only', async () => {
+  vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline')));
+  await expect(requestJSON('/api/session')).rejects.toMatchObject({
+    code: 'NETWORK_ERROR',
+    message: expect.stringContaining('npm run dev'),
+  });
+  await expect(requestJSON('https://example.test/api/session')).rejects.toMatchObject({
+    code: 'NETWORK_ERROR',
+    message: expect.not.stringContaining('npm run dev'),
+  });
+});
