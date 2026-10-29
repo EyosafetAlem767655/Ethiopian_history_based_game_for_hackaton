@@ -327,8 +327,8 @@ function App() {
             </div>
             <div className="top-right">
               <span className="network">
-                <i /> BASE SEPOLIA{' '}
-                <em>{me?.history?.[0]?.status === 'confirmed' ? 'LIVE' : 'SIMULATED'}</em>
+                <i /> PROFILE{' '}
+                <em>{me?.wallet?.status === 'verified' ? 'WALLET LINKED' : 'WALLET NOT LINKED'}</em>
               </span>
               <button
                 className="sound"
@@ -865,6 +865,15 @@ function App() {
                   </span>
                 </div>
                 <WalletPanel onLinked={refresh} />
+                <p className="profile-identity">
+                  Game profile ID: <code>{session.profile.id}</code>
+                  <br />
+                  Wallet link:{' '}
+                  {me?.wallet?.status === 'verified'
+                    ? 'Verified signature · saved in the game database'
+                    : 'Not linked'}{' '}
+                  · On-chain profile registration: not implemented.
+                </p>
                 <div className="stats-row">
                   {[
                     ['LIFETIME XP', progress?.xp],
@@ -1576,6 +1585,12 @@ function WalletPanel({ onLinked }: { onLinked: () => Promise<void> }) {
       <div>
         <span className="eyebrow">CRYPTOGRAPHIC WALLET IDENTITY</span>
         <p>{me?.wallet?.address ?? 'Wallet pending. Guest identity is stored independently.'}</p>
+        {me?.wallet?.playerId && <p>Wallet player ID: {me.wallet.playerId}</p>}
+        <p>
+          {me?.wallet?.address
+            ? 'Wallet ownership verified. Your profile link is stored off-chain.'
+            : 'Sign a message to prove wallet ownership. Linking does not spend funds or send a blockchain transaction.'}
+        </p>
         {me?.wallet?.address && (
           <a
             target="_blank"
@@ -1597,8 +1612,11 @@ function WalletPanel({ onLinked }: { onLinked: () => Promise<void> }) {
               throw Error(
                 'Install a compatible browser wallet to link an address. Embedded-wallet onboarding is not configured.',
               );
-            const [address] = await eth.request({ method: 'eth_requestAccounts' }),
-              challenge = await api('/wallet/nonce', {});
+            const accounts = await eth.request({ method: 'eth_requestAccounts' });
+            const address = accounts?.[0];
+            if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address))
+              throw Error('Select a wallet account before linking.');
+            const challenge = await api('/wallet/nonce', { address });
             const bytes = new TextEncoder().encode(challenge.message);
             const message =
               '0x' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
@@ -1618,7 +1636,7 @@ function WalletPanel({ onLinked }: { onLinked: () => Promise<void> }) {
         {loading
           ? 'AWAITING SIGNATURE...'
           : me?.wallet?.address
-            ? 'VERIFY ANOTHER WALLET'
+            ? 'VERIFY LINKED WALLET'
             : 'LINK YOUR WALLET'}
       </button>
     </div>

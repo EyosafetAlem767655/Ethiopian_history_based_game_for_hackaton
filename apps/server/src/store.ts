@@ -22,6 +22,8 @@ export const db = new Database(process.env.DB_PATH ?? 'data/knights.sqlite');
 db.pragma('journal_mode = WAL');
 db.exec(`CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY,name TEXT NOT NULL,demo INTEGER NOT NULL,hero INTEGER NOT NULL DEFAULT 0,progress TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS wallets(player_id TEXT PRIMARY KEY,address TEXT UNIQUE NOT NULL);
+CREATE TABLE IF NOT EXISTS wallet_nonces(player_id TEXT PRIMARY KEY,nonce TEXT NOT NULL,expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS results (id TEXT PRIMARY KEY,demo INTEGER NOT NULL,payload TEXT NOT NULL,hash TEXT NOT NULL,created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS participants (match_id TEXT NOT NULL,player_id TEXT NOT NULL,PRIMARY KEY(match_id,player_id));
 CREATE TABLE IF NOT EXISTS badges (player_id TEXT NOT NULL,badge TEXT NOT NULL,match_id TEXT NOT NULL,PRIMARY KEY(player_id,badge));

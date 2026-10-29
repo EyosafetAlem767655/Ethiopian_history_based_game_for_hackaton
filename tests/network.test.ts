@@ -52,10 +52,13 @@ async function session(name: string) {
 it('verifies wallet ownership once and rejects simulated gathering for normal guests', async () => {
   const s = await session('Wallet Tester'),
     account = privateKeyToAccount(generatePrivateKey()),
-    challenge = await request('/wallet/nonce', s, {});
+    challenge = await request('/wallet/nonce', s, { address: account.address });
   const signature = await account.signMessage({ message: challenge.message });
   const linked = await request('/wallet/bind', s, { address: account.address, signature });
   expect(linked.verified).toBe(true);
+  expect(linked.playerId).toBe(`eip155:84532:${account.address.toLowerCase()}`);
+  expect(linked.registration).toBe('off-chain');
+  expect((await request('/me', s)).wallet.playerId).toBe(linked.playerId);
   await expect(
     request('/wallet/bind', s, { address: account.address, signature }),
   ).rejects.toThrow();
@@ -63,6 +66,40 @@ it('verifies wallet ownership once and rejects simulated gathering for normal gu
   await expect(request('/gathering/demo', normal, { squadId: 'fake' })).rejects.toThrow(
     'demo-only',
   );
+});
+it('rejects competing wallet links and wallet requests from a different website', async () => {
+  const owner = await session('Wallet Owner'),
+    other = await session('Other Player'),
+    wallet = privateKeyToAccount(generatePrivateKey()),
+    a = await request('/wallet/nonce', owner, { address: wallet.address }),
+    b = await request('/wallet/nonce', other, { address: wallet.address });
+  await request('/wallet/bind', owner, {
+    address: wallet.address,
+    signature: await wallet.signMessage({ message: a.message }),
+  });
+  const conflict = await fetch(base + '/api/wallet/bind', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + other.token },
+    body: JSON.stringify({
+      address: wallet.address,
+      signature: await wallet.signMessage({ message: b.message }),
+    }),
+  });
+  expect(conflict.status).toBe(409);
+  expect((await request('/me', owner)).wallet.address).toBe(wallet.address.toLowerCase());
+  expect((await request('/me', other)).wallet.status).toBe('pending');
+  for (const path of ['/wallet/nonce', '/wallet/bind']) {
+    const denied = await fetch(base + '/api' + path, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + owner.token,
+        Origin: 'https://different.example',
+      },
+      body: JSON.stringify({ address: wallet.address }),
+    });
+    expect(denied.status).toBe(403);
+  }
 });
 function play(r: Room, id: string, drive = true) {
   let w: World | undefined,

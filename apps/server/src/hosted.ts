@@ -22,9 +22,7 @@ export const supabase =
     : null;
 db.exec(`CREATE TABLE IF NOT EXISTS hosted_identities(id TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS hosted_outbox(match_id TEXT PRIMARY KEY,status TEXT NOT NULL DEFAULT 'pending',error TEXT);
-CREATE TABLE IF NOT EXISTS gathering_sessions(id TEXT PRIMARY KEY,squad_id TEXT NOT NULL,path TEXT,approvals TEXT NOT NULL DEFAULT '[]',verified INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS wallets(player_id TEXT PRIMARY KEY,address TEXT UNIQUE NOT NULL);
-CREATE TABLE IF NOT EXISTS wallet_nonces(player_id TEXT PRIMARY KEY,nonce TEXT NOT NULL,expires INTEGER NOT NULL);`);
+CREATE TABLE IF NOT EXISTS gathering_sessions(id TEXT PRIMARY KEY,squad_id TEXT NOT NULL,path TEXT,approvals TEXT NOT NULL DEFAULT '[]',verified INTEGER NOT NULL DEFAULT 0);`);
 export function isHosted(id: string) {
   return !!db.prepare('SELECT id FROM hosted_identities WHERE id=?').get(id);
 }

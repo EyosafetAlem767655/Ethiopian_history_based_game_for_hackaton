@@ -6,7 +6,14 @@ import { randomUUID } from 'node:crypto';
 import { Server } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import { z } from 'zod';
-import { verifyMessage } from 'viem';
+import type { Address, Hex } from 'viem';
+import {
+  bindWallet,
+  checkWalletOrigin,
+  issueWalletChallenge,
+  walletIdentity,
+  WalletLinkError,
+} from './wallet';
 import { registerHostedRoutes, exchangeHosted, isHosted, syncHosted } from './hosted';
 import { BaseAttestation, processOutbox } from './attestation';
 import { BattleRoom } from './room';
@@ -113,57 +120,39 @@ app.use('/api', (q, r, next) => {
 });
 app.get('/api/me', (_q, r) => {
   const p = profile(r.locals.player.id)!;
-  const wallet = db.prepare('SELECT address FROM wallets WHERE player_id=?').get(p.id) as any;
   r.json({
     profile: p,
     identity: isHosted(p.id) ? 'supabase' : 'local-guest',
     badges: badges(p.id),
     history: history(p.id),
-    wallet: wallet
-      ? { status: 'verified', address: wallet.address }
-      : { status: 'pending', label: 'Wallet not connected' },
+    wallet: walletIdentity(p.id),
     campaign: campaignProgress(p.id),
   });
 });
-app.post('/api/wallet/nonce', (_q, r) => {
-  const nonce = `Ethiopian Knights wallet binding\nPlayer: ${r.locals.player.id}\nNonce: ${randomUUID()}\nThis signature links your wallet. It does not authorize transactions.`;
-  db.prepare('INSERT OR REPLACE INTO wallet_nonces VALUES (?,?,?)').run(
-    r.locals.player.id,
-    nonce,
-    Date.now() + 300000,
-  );
-  r.json({ message: nonce });
+app.post('/api/wallet/nonce', (q, r) => {
+  try {
+    checkWalletOrigin(q.headers.origin);
+    const { address } = z
+      .object({ address: z.string().regex(/^0x[0-9a-fA-F]{40}$/) })
+      .parse(q.body);
+    r.json(issueWalletChallenge(r.locals.player.id, address as Address));
+  } catch (e) {
+    r.status(e instanceof WalletLinkError ? e.status : 400).json({ error: (e as Error).message });
+  }
 });
 app.post('/api/wallet/bind', async (q, r) => {
   try {
+    checkWalletOrigin(q.headers.origin);
     const { address, signature } = z
       .object({
         address: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
         signature: z.string().regex(/^0x[0-9a-fA-F]+$/),
       })
       .parse(q.body);
-    const row = db
-      .prepare('SELECT * FROM wallet_nonces WHERE player_id=?')
-      .get(r.locals.player.id) as any;
-    if (!row || row.expires < Date.now()) throw Error('Request a fresh signing challenge');
-    if (
-      !(await verifyMessage({
-        address: address as `0x${string}`,
-        message: row.nonce,
-        signature: signature as `0x${string}`,
-      }))
-    )
-      throw Error('Wallet signature invalid');
-    db.transaction(() => {
-      db.prepare('INSERT OR REPLACE INTO wallets VALUES (?,?)').run(
-        r.locals.player.id,
-        address.toLowerCase(),
-      );
-      db.prepare('DELETE FROM wallet_nonces WHERE player_id=?').run(r.locals.player.id);
-    })();
-    r.json({ verified: true, address });
+    const wallet = await bindWallet(r.locals.player.id, address as Address, signature as Hex);
+    r.json({ verified: true, ...wallet });
   } catch (e) {
-    r.status(400).json({ error: (e as Error).message });
+    r.status(e instanceof WalletLinkError ? e.status : 400).json({ error: (e as Error).message });
   }
 });
 registerHostedRoutes(app);
