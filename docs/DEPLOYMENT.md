@@ -90,6 +90,8 @@ Under Authentication → URL Configuration:
 
 Keep email authentication enabled. Add only intentional preview redirects. A guest remains a guest; selecting an authenticated account does not silently merge a different guest's progress.
 
+Main link is the render one, vercel is depreciated. 
+
 ## 7. Optional: host the frontend on Vercel instead
 
 Skip this section for the single Render service.
