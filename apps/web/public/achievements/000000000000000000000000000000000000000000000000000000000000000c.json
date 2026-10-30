@@ -1,0 +1,12 @@
+{
+  "name": "Tournament Champion",
+  "description": "Ethiopian Knights server-validated achievement: Tournament Champion",
+  "image": "/assets/portraits.png",
+  "properties": {
+    "id": 12,
+    "standard": "ERC-1155-compatible",
+    "network": "Base Sepolia",
+    "inventory": "off-chain",
+    "demoRewardsAreSimulated": true
+  }
+}

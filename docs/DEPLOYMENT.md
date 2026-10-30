@@ -1,6 +1,6 @@
 # Deploy ክብረ ጉግስ: free Render + free Supabase
 
-Team chat uses Socket.IO on the same backend origin and port as Colyseus. Route `/socket.io/` polling and WebSocket upgrades to that backend. Apply migrations `005_team_chat.sql` and `009_social.sql` after the existing migrations. Notifications (`/notify`) and spectators (`/spectate`) use the same Socket.IO server. Set `WALLET_ORIGIN` to the actual frontend origin (including a same-origin Render frontend), and include separate frontend origins in `CORS_ORIGINS`. No separate chat service/key is required. Verify gameplay and chat with two devices and a reconnect after deployment.
+Team chat uses Socket.IO on the same backend origin and port as Colyseus. Route `/socket.io/` polling and WebSocket upgrades to that backend. Apply migrations through `009_social.sql`. Notifications (`/notify`) and spectators (`/spectate`) use the same Socket.IO server. Set `WALLET_ORIGIN` to the actual frontend origin (including a same-origin Render frontend), and include separate frontend origins in `CORS_ORIGINS`. No separate chat service/key is required. Verify gameplay and chat with two devices and a reconnect after deployment.
 
 One Render web service builds the web app and serves it together with the API and Colyseus WebSocket from the same origin. Supabase Postgres holds authoritative records, auth and private storage. SQLite is for local development. No Vercel, Railway, Neon or persistent disk is required.
 
@@ -30,7 +30,9 @@ Self-hosted vision runtime/model/OCR files and licenses are included under apps/
 
 ## 2. Apply only pending Supabase migrations
 
-In the existing project's SQL editor apply 002_campaign.sql if still pending, then 003_runtime.sql, 004_evidence_cleanup.sql, 005_team_chat.sql and 009_social.sql (friends, notifications and tournaments). With the GitHub integration, record already-applied versions in supabase_migrations.schema_migrations first so they are not rerun. For CLI-managed installations inspect supabase migration list first. Do not rerun 001, delete the project or use supabase db reset on production.
+In the existing project's SQL editor apply only pending migrations in order: 002_campaign.sql, 003_runtime.sql, 004_evidence_cleanup.sql, 005_team_chat.sql, **006_session_revocation.sql**, **007_web3_jobs.sql**, **008_private_media.sql**, **009_social.sql** (friends, notifications and tournaments). With the GitHub integration, record already-applied versions in supabase_migrations.schema_migrations first so they are not rerun. For CLI-managed installations inspect supabase migration list first. Do not rerun 001, delete the project or use supabase db reset on production. Readiness now checks the new tables and upload-fencing columns; do not deploy this backend against an older schema.
+
+After 008, redeploy the updated `age-cleanup` Edge Function and verify its existing schedule. It now handles durable media deletion jobs as well as expired age evidence. Keep its service secret private. Upload reservations expire after two minutes; known completed objects are removed on withdrawal, and late/orphan objects remain scheduled for cleanup. Storage requests run outside the global database transaction and use a ten-second backend network timeout.
 
 003 adds a private game_runtime schema and copies existing hosted records without overwriting runtime rows. Existing public tables remain as legacy records; all new game writes/reads use game_runtime. Do not expose this schema in the Data API. Canonical game IDs remain distinct from linked Supabase auth IDs. Distinct accounts are not automatically merged.
 
@@ -44,6 +46,8 @@ Stop gameplay during migration. In your local process environment supply SUPABAS
     node --import tsx scripts/import-sqlite.ts --source=output/backups/before-render.sqlite --apply
 
 The first command is a dry run. Without a target URL it checks only source integrity/counts; with the URL it also detects target duplicates/conflicts. Apply uses one database transaction and creates a pre-import backup. Conflicts cause rollback; reconcile them deliberately rather than overwriting newer records. Identical repeated imports skip duplicates. Do not import a database still receiving writes.
+
+The manifest now includes chat history, age-review eligibility, token revocations, Web3 jobs/challenges and pending media deletions. Postgres allocates fresh chat sequence values in the original message order. Treat the backup as sensitive: it can contain birth dates and references to private storage. Existing storage objects must remain in the corresponding private buckets.
 
 If the old backend used an environment override instead of its generated SQLite secret, preserve that actual override and pass --external-secret. The tool does not print secrets.
 
@@ -65,6 +69,8 @@ Push the reviewed source and assets to your repository. In Render choose New →
 | WALLET_ORIGIN                                    | Exact frontend origin used in ownership signatures                            |
 | ENABLE_DEMO                                      | true                                                                          |
 | ALLOW_CHAIN_BROADCAST                            | false until separately authorized                                             |
+| RECORDS_ADDRESS                                  | Updated official contract address; required before live registration/rewards  |
+| VITE_RECORDS_ADDRESS                             | Same official address, baked into the frontend build                          |
 | AGE_REVIEWER_IDS                                 | Leave unset until cleanup and reviewer setup are verified                     |
 
 The server connects to Postgres with full TLS certificate verification. Supabase signs its database and pooler certificates with its own root CA, which Node does not trust by default, so without SUPABASE_DB_CA startup fails with `SELF_SIGNED_CERT_IN_CHAIN` and the health check never passes. Download the certificate from Supabase Dashboard → Project Settings → Database → SSL Configuration and paste the whole PEM, including the BEGIN/END lines, as the value. Escaped `\n` newlines are accepted. The same variable is used by scripts/import-sqlite.ts.
@@ -85,15 +91,15 @@ HTML, an empty body or a provider error page is not game API success. Cold start
 
 Under Authentication → URL Configuration:
 
-| Setting                       | Value                                                   |
-| ----------------------------- | ------------------------------------------------------- |
-| Site URL                      | https://ethiopian-history-based-game-for-ha.vercel.app/ |
-| Production redirect           | https://ethiopian-history-based-game-for-ha.vercel.app/ |
-| Optional development redirect | http://localhost:5173/                                  |
+| Setting                       | Value                              |
+| ----------------------------- | ---------------------------------- |
+| Site URL                      | https://YOUR-ACTUAL-RENDER-DOMAIN/ |
+| Production redirect           | https://YOUR-ACTUAL-RENDER-DOMAIN/ |
+| Optional development redirect | http://localhost:5173/             |
 
 Keep email authentication enabled. Add only intentional preview redirects. A guest remains a guest; selecting an authenticated account does not silently merge a different guest's progress.
 
-Main link is the render one, vercel is deprecated.
+Use the actual Render frontend origin for the single-service deployment; the earlier Vercel deployment is deprecated. If intentionally deploying a separate frontend, use that frontend's exact origin instead.
 
 ## 7. Optional: host the frontend on Vercel instead
 
@@ -127,7 +133,7 @@ Verify with a **synthetic image**, not a real ID: upload it privately, create an
 
 Sign in to the game using the designated reviewer's Supabase email account. Find its UUID under Authentication → Users. Set comma-separated reviewer UUIDs in Render's AGE_REVIEWER_IDS and redeploy only after cleanup works.
 
-While signed in, visit https://ethiopian-history-based-game-for-ha.vercel.app/?review=1. Choose Set up / unlock reviewer MFA, scan the QR code with an authenticator, and enter a current code. Every reviewer API call requires both the server allowlist and a validated MFA session.
+While signed in, visit https://YOUR-ACTUAL-RENDER-DOMAIN/?review=1. Choose Set up / unlock reviewer MFA, scan the QR code with an authenticator, and enter a current code. Every reviewer API call requires both the server allowlist and a validated MFA session.
 
 Players consent, select a Fayda image and confirm its complete birth date/calendar. OCR only suggests a date. Reviewers inspect the image and date before approval, rejection or resubmission. Unclear/incomplete dates require resubmission. This is manual age review, not government document authentication, liveness or proof that the ID belongs to the submitter.
 
@@ -156,3 +162,5 @@ Retain the SQLite snapshot, active signing secret and a verified Supabase export
 Rollback to a tested revision supporting the new persistence adapter while keeping additive schemas and secrets. An old SQLite-only backend on free Render is not a safe rollback. Do not restore stale data over newer results; restore into an isolated project first, compare counts/hashes and schedule a deliberate cutover.
 
 Public verification requires the deployed Render URL and owner configuration. Base Sepolia remains simulated unless separately configured/authorized; this upgrade broadcasts no public transaction.
+
+For the updated contract, absolute badge metadata, attestor permissions and the registration/result/claim acceptance sequence, follow [lesson 3](LESSON-03-REGISTRATION-REWARDS-AND-SECURITY.md#setup-for-the-teammate-deploying-it). Existing contract bytecode cannot gain the new profile registry by changing an environment variable.

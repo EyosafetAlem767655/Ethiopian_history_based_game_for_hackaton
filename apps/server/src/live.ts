@@ -1,6 +1,6 @@
 import type { Namespace, Server } from 'socket.io';
 import type { World } from '../../../packages/shared/src/game';
-import { authenticate } from './store';
+import { authenticate, sessionEvents, sessionFingerprint } from './store';
 
 /**
  * Spectators never join a Colyseus room: matches lock after their start window and seats are
@@ -51,6 +51,12 @@ export function liveMatches(demo: boolean) {
 }
 export function registerSpectators(io: Server) {
   channel = io.of('/spectate');
+  const watchers = channel;
+  // Logging out revokes the token: stop its spectator feeds immediately.
+  sessionEvents.on('revoked', (fingerprint: string) => {
+    for (const s of watchers.sockets.values())
+      if (sessionFingerprint(s.handshake.auth.token) === fingerprint) s.disconnect(true);
+  });
   channel.use(async (socket, next) => {
     try {
       const p = await authenticate(socket.handshake.auth.token),

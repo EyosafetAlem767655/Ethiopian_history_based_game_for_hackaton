@@ -41,6 +41,10 @@ export function postgresSQL(sql: string) {
     'notifications',
     'friends',
     'tournaments',
+    'revoked_sessions',
+    'web3_jobs',
+    'web3_challenges',
+    'media_deletions',
   ]);
   // A transaction pooler does not guarantee session settings: never depend on search_path.
   value = value.replace(

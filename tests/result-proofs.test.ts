@@ -115,10 +115,19 @@ describe('immutable result identity', () => {
 });
 
 describe('independent result checks', () => {
+  it('rejects an untrusted contract even when its record perfectly matches the payload', async () => {
+    const proof = await liveProof(),
+      read = readerFor(proof);
+    expect(
+      (await verifyProof(proof, read, '0x3333333333333333333333333333333333333333')).chain,
+    ).toBe('untrusted');
+    expect((await verifyProof(proof, read, '')).chain).toBe('unconfigured');
+    expect(read).not.toHaveBeenCalled();
+  });
   it('verifies simulated integrity without contacting a blockchain', async () => {
     const { proof } = await finishedMatch(true),
       read = vi.fn<AnchorReader>();
-    expect(await verifyProof(proof, read)).toMatchObject({
+    expect(await verifyProof(proof, read, contract)).toMatchObject({
       local: { status: 'match' },
       chain: 'simulated',
     });
@@ -169,7 +178,7 @@ describe('independent result checks', () => {
   it('verifies both the hash and winners by reading the configured contract', async () => {
     const proof = await liveProof(),
       read = readerFor(proof),
-      check = await verifyProof(proof, read);
+      check = await verifyProof(proof, read, contract);
     expect(read).toHaveBeenCalledWith(contract, matchKey(proof.matchId));
     expect(check).toMatchObject({ local: { status: 'match' }, chain: 'match', attestor: wallet });
     expect(check.recordedAt).toBe('2023-11-14T22:13:20.000Z');
@@ -179,7 +188,7 @@ describe('independent result checks', () => {
     const proof = await liveProof(),
       read = readerFor(proof);
     read.mockResolvedValue([proof.hash, winnerKey(parseResult(proof.payload)), 0n, wallet]);
-    expect((await verifyProof(proof, read)).chain).toBe('not-found');
+    expect((await verifyProof(proof, read, contract)).chain).toBe('not-found');
   });
 
   it('rejects either a result-hash mismatch or a winner mismatch on-chain', async () => {
@@ -188,15 +197,15 @@ describe('independent result checks', () => {
       wrong = keccak256(stringToHex('wrong'));
     read.mockResolvedValueOnce([wrong, winnerKey(parseResult(proof.payload)), 1700000000n, wallet]);
     read.mockResolvedValueOnce([proof.hash, wrong, 1700000000n, wallet]);
-    expect((await verifyProof(proof, read)).chain).toBe('mismatch');
-    expect((await verifyProof(proof, read)).chain).toBe('mismatch');
+    expect((await verifyProof(proof, read, contract)).chain).toBe('mismatch');
+    expect((await verifyProof(proof, read, contract)).chain).toBe('mismatch');
   });
 
   it('reports a network failure separately from local integrity', async () => {
     const proof = await liveProof(),
       read = readerFor(proof);
     read.mockRejectedValue(Error('RPC unavailable'));
-    expect(await verifyProof(proof, read)).toMatchObject({
+    expect(await verifyProof(proof, read, contract)).toMatchObject({
       local: { status: 'match' },
       chain: 'unavailable',
     });
@@ -235,7 +244,7 @@ describe('independent result checks', () => {
       expect(winnerKey(parseResult(legacy.payload))).toBe(
         keccak256(stringToHex(JSON.stringify([payload.participants[0].id]))),
       );
-      expect((await verifyProof(legacy, read)).chain).toBe('match');
+      expect((await verifyProof(legacy, read, contract)).chain).toBe('match');
     },
   );
 });

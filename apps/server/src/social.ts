@@ -1,7 +1,7 @@
 import type { Express } from 'express';
 import type { Server } from 'socket.io';
 import { z } from 'zod';
-import { authenticate, db, profile } from './store';
+import { authenticate, db, profile, sessionEvents, sessionFingerprint } from './store';
 import { currentSquad } from './chat';
 import { attachNotifyHub, markSeen, notifications, notify, playerRoom, push } from './notify';
 
@@ -132,6 +132,11 @@ export function registerSocialRoutes(app: Express) {
 export function registerNotifySocket(io: Server) {
   const hub = io.of('/notify');
   attachNotifyHub(hub);
+  // Logging out revokes the token: close its notification sockets immediately.
+  sessionEvents.on('revoked', (fingerprint: string) => {
+    for (const s of hub.sockets.values())
+      if (sessionFingerprint(s.handshake.auth.token) === fingerprint) s.disconnect(true);
+  });
   hub.use(async (socket, next) => {
     try {
       socket.data.playerId = (await authenticate(socket.handshake.auth.token)).id;

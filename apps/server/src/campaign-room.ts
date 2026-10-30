@@ -1,5 +1,11 @@
 import { assertHumanBand, readAvatar } from './customization';
 import { isMatchPool } from '../../../packages/shared/src/customization';
+import {
+  guardRoomSession,
+  recheckRoomSession,
+  forgetRoomSessions,
+  forgetClientSession,
+} from './session-guard';
 import { Room, type Client } from '@colyseus/core';
 import { z } from 'zod';
 import {
@@ -108,6 +114,7 @@ export class CampaignRoom extends Room {
       if (!s || !JSON.parse(s.members).includes(p.id) || o.squadId !== this.metadata.squadId)
         throw Error('Squad membership required');
     }
+    guardRoomSession(this, _c, o.token);
     return p;
   }
   async onJoin(
@@ -118,6 +125,7 @@ export class CampaignRoom extends Room {
     auth: Profile,
   ) {
     const p = auth ?? (c.auth as Profile);
+    if ([...this.ids.values()].includes(p.id)) throw Error('Already participating in this mission');
     this.ids.set(c.sessionId, p.id);
     const replacement = this.w.players.find((f) => f.bot && f.id.startsWith('bot') && f.team === 0);
     if (replacement) this.w.players = this.w.players.filter((f) => f.id !== replacement.id);
@@ -139,6 +147,7 @@ export class CampaignRoom extends Room {
     }
     f.avatar = p.avatar;
     f.armor = equippedArmor(p);
+    if (this.metadata.squadId) f.squadId = this.metadata.squadId;
     this.w.players.push(f);
     const progress = await campaignProgress(p.id);
     f.prestige = progress.honor + (progress.contribution ?? 0);
@@ -153,16 +162,28 @@ export class CampaignRoom extends Room {
     if (!p) return;
     this.inputs.delete(p.id);
     p.bot = true;
+    let next: Client | undefined;
     if (!consented)
       try {
-        const next = await this.allowReconnection(c, 30);
+        next = await this.allowReconnection(c, 30);
+        await recheckRoomSession(this, c, next);
         if (this.maxClients > 1) await assertHumanBand(p.id, this.metadata.ageBand);
+        if (this.metadata.squadId) {
+          const squad = await db
+            .prepare('SELECT members FROM squads WHERE id=?')
+            .get(this.metadata.squadId);
+          if (!squad || !JSON.parse(squad.members).includes(p.id))
+            throw Error('Squad membership changed');
+        }
         p.bot = false;
         next.send('snapshot', this.w);
         if (this.recorded) next.send('result', { matchId: this.roomId });
+        return;
       } catch {
+        next?.leave(4001, 'Session or membership changed');
         /* retained AI substitution */
       }
+    forgetClientSession(this, c);
   }
   update() {
     if (this.w.finished) {
@@ -212,9 +233,6 @@ export class CampaignRoom extends Room {
       publishSnapshot(this.roomId, this.w);
     }
   }
-  onDispose() {
-    unregisterLive(this.roomId);
-  }
   async settle() {
     if (this.saving || this.recorded) return;
     this.saving = true;
@@ -244,5 +262,9 @@ export class CampaignRoom extends Room {
     } finally {
       this.saving = false;
     }
+  }
+  onDispose() {
+    forgetRoomSessions(this);
+    unregisterLive(this.roomId);
   }
 }

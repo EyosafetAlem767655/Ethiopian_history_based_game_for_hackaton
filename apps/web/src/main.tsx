@@ -19,6 +19,7 @@ import {
   LiveMatches,
   SpectatorView,
 } from './Social';
+import { Web3Panel } from './Web3Panel';
 import { ScrollGuide } from './ScrollGuide';
 import { audio } from './audio';
 import { MISSIONS, DEMO_MISSIONS, missionEligibility } from '../../../packages/shared/src/missions';
@@ -26,7 +27,7 @@ import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
 import type { Mode, World } from '../../../packages/shared/src/game';
 import './style.css';
 import './expansion.css';
-import { hostedAuth, resumeHosted, signInEmail } from './hostedAuth';
+import { hostedAuth, resumeHosted, signInEmail, signOutIdentity } from './hostedAuth';
 const heroes = [
   {
     name: 'The Lion Guard',
@@ -121,7 +122,11 @@ function App() {
       try {
         useUI.setState({ me: await api('/me') });
       } catch (e) {
-        useUI.setState({ error: (e as Error).message });
+        useUI.setState({
+          error:
+            (e as Error)?.message ||
+            'The request could not be completed. Check your connection and try again.',
+        });
       }
     }
   }
@@ -173,7 +178,11 @@ function App() {
     try {
       await fn();
     } catch (e) {
-      useUI.setState({ error: (e as Error).message });
+      useUI.setState({
+        error:
+          (e as Error)?.message ||
+          'The request could not be completed. Check your connection and try again.',
+      });
     } finally {
       setBusy(false);
     }
@@ -261,7 +270,8 @@ function App() {
     });
     r.onMessage('waiting', (m: { seconds: number }) => setWaiting(m.seconds));
     r.onMessage('identity', () => {});
-    r.onMessage('chat', (m: any) => setMessages((v) => [...v.slice(-15), m]));
+    r.onMessage('chat', (m: any) => setMessages((v) => [...v.slice(-99), m]));
+    r.onMessage('chat:history', (history: any[]) => setMessages(history));
     r.onMessage('saving', () => useUI.setState({ resultSaved: false }));
     r.onMessage('result', () => {
       useUI.setState({ resultSaved: true });
@@ -1074,7 +1084,7 @@ function App() {
                   {me?.wallet?.status === 'verified'
                     ? 'Verified signature · saved in the game database'
                     : 'Not linked'}{' '}
-                  · On-chain profile registration: not implemented.
+                  · Registration and token claim status are shown separately above.
                 </p>
                 <div className="stats-row">
                   {[
@@ -1130,12 +1140,13 @@ function App() {
                 <button
                   className="outline-btn"
                   style={{ marginTop: 25, marginLeft: 12 }}
-                  onClick={() => {
-                    localStorage.removeItem('knights-session');
-                    useUI.setState({ session: null, me: null });
-                    setSquad(null);
-                    setPage('identity');
-                  }}
+                  onClick={() =>
+                    action(async () => {
+                      await signOutIdentity();
+                      setSquad(null);
+                      setPage('identity');
+                    })
+                  }
                 >
                   CHANGE IDENTITY / SIGN OUT
                 </button>
@@ -1462,9 +1473,12 @@ function App() {
                 {muted ? '♪̸' : '♪'}
               </button>
             </div>
-            {waiting > 0 && !snapshot && (
+            {/* Match chat is for the pre-match countdown only; it hides once the fight begins. */}
+            {room && (waiting > 0 || !snapshot) && (
               <form
                 className="lobby-chat"
+                data-chat-controls
+                aria-label="Match chat"
                 onSubmit={(e) => {
                   e.preventDefault();
                   if (chat.trim()) {
@@ -1473,18 +1487,26 @@ function App() {
                   }
                 }}
               >
-                {messages.map((m, i) => (
-                  <p key={i}>
-                    {m.name}: {m.text}
-                  </p>
-                ))}
-                <input
-                  aria-label="Lobby chat"
-                  value={chat}
-                  onChange={(e) => setChat(e.target.value)}
-                  maxLength={200}
-                  placeholder="Lobby message…"
-                />
+                <details>
+                  <summary>MATCH CHAT · ALL PLAYERS</summary>
+                  <div role="log" aria-live="polite">
+                    {messages.slice(-20).map((m, i) => (
+                      <p key={i}>
+                        {m.name}: {m.text}
+                      </p>
+                    ))}
+                  </div>
+                  <input
+                    aria-label="Message players in this match"
+                    value={chat}
+                    onChange={(e) => setChat(e.target.value)}
+                    maxLength={200}
+                    placeholder="Match message (visible to opponents)…"
+                  />
+                  <button className="outline-btn" disabled={!chat.trim()}>
+                    SEND TO MATCH
+                  </button>
+                </details>
               </form>
             )}
           </div>
@@ -1606,7 +1628,11 @@ function HostedLogin({ nickname }: { nickname: string }) {
             await signInEmail(email);
             setSent(true);
           } catch (e) {
-            useUI.setState({ error: (e as Error).message });
+            useUI.setState({
+              error:
+                (e as Error)?.message ||
+                'The request could not be completed. Check your connection and try again.',
+            });
           } finally {
             setLoading(false);
           }
@@ -1674,7 +1700,11 @@ function GatheringPanel({ squad, onVerified }: { squad: any; onVerified: () => P
     try {
       await fn();
     } catch (e) {
-      useUI.setState({ error: (e as Error).message });
+      useUI.setState({
+        error:
+          (e as Error)?.message ||
+          'The request could not be completed. Check your connection and try again.',
+      });
     } finally {
       setLoading(false);
     }
@@ -1819,7 +1849,10 @@ function GatheringPanel({ squad, onVerified }: { squad: any; onVerified: () => P
                   className="gold-btn"
                   onClick={() =>
                     run(async () => {
-                      await api('/gathering/' + record.id + '/approve', { consent });
+                      await api('/gathering/' + record.id + '/approve', {
+                        consent,
+                        revision: record.revision,
+                      });
                       await refresh();
                       await onVerified();
                     })
@@ -1871,65 +1904,72 @@ function WalletPanel({ onLinked }: { onLinked: () => Promise<void> }) {
   const { me } = useUI(),
     [loading, setLoading] = useState(false);
   return (
-    <div className="wallet-panel">
-      <div>
-        <span className="eyebrow">CRYPTOGRAPHIC WALLET IDENTITY</span>
-        <p>{me?.wallet?.address ?? 'Wallet pending. Guest identity is stored independently.'}</p>
-        {me?.wallet?.playerId && <p>Wallet player ID: {me.wallet.playerId}</p>}
-        <p>
-          {me?.wallet?.address
-            ? 'Wallet ownership verified. Your profile link is stored off-chain.'
-            : 'Sign a message to prove wallet ownership. Linking does not spend funds or send a blockchain transaction.'}
-        </p>
-        {me?.wallet?.address && (
-          <a
-            target="_blank"
-            rel="noreferrer"
-            href={'https://sepolia.basescan.org/address/' + me.wallet.address}
-          >
-            View wallet on Base Sepolia ↗
-          </a>
-        )}
+    <>
+      <div className="wallet-panel">
+        <div>
+          <span className="eyebrow">CRYPTOGRAPHIC WALLET IDENTITY</span>
+          <p>{me?.wallet?.address ?? 'Wallet pending. Guest identity is stored independently.'}</p>
+          {me?.wallet?.playerId && <p>Wallet player ID: {me.wallet.playerId}</p>}
+          <p>
+            {me?.wallet?.address
+              ? 'Wallet ownership verified. Your profile link is stored off-chain.'
+              : 'Sign a message to prove wallet ownership. Linking does not spend funds or send a blockchain transaction.'}
+          </p>
+          {me?.wallet?.address && (
+            <a
+              target="_blank"
+              rel="noreferrer"
+              href={'https://sepolia.basescan.org/address/' + me.wallet.address}
+            >
+              View wallet on Base Sepolia ↗
+            </a>
+          )}
+        </div>
+        <button
+          disabled={loading}
+          className="outline-btn"
+          onClick={async () => {
+            setLoading(true);
+            try {
+              const eth = (window as any).ethereum;
+              if (!eth)
+                throw Error(
+                  'Install a compatible browser wallet to link an address. Embedded-wallet onboarding is not configured.',
+                );
+              const accounts = await eth.request({ method: 'eth_requestAccounts' });
+              const address = accounts?.[0];
+              if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address))
+                throw Error('Select a wallet account before linking.');
+              const challenge = await api('/wallet/nonce', { address });
+              const bytes = new TextEncoder().encode(challenge.message);
+              const message =
+                '0x' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+              const signature = await eth.request({
+                method: 'personal_sign',
+                params: [message, address],
+              });
+              await api('/wallet/bind', { address, signature });
+              await onLinked();
+            } catch (e) {
+              useUI.setState({
+                error:
+                  (e as Error)?.message ||
+                  'The request could not be completed. Check your connection and try again.',
+              });
+            } finally {
+              setLoading(false);
+            }
+          }}
+        >
+          {loading
+            ? 'AWAITING SIGNATURE...'
+            : me?.wallet?.address
+              ? 'VERIFY LINKED WALLET'
+              : 'LINK YOUR WALLET'}
+        </button>
       </div>
-      <button
-        disabled={loading}
-        className="outline-btn"
-        onClick={async () => {
-          setLoading(true);
-          try {
-            const eth = (window as any).ethereum;
-            if (!eth)
-              throw Error(
-                'Install a compatible browser wallet to link an address. Embedded-wallet onboarding is not configured.',
-              );
-            const accounts = await eth.request({ method: 'eth_requestAccounts' });
-            const address = accounts?.[0];
-            if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address))
-              throw Error('Select a wallet account before linking.');
-            const challenge = await api('/wallet/nonce', { address });
-            const bytes = new TextEncoder().encode(challenge.message);
-            const message =
-              '0x' + Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-            const signature = await eth.request({
-              method: 'personal_sign',
-              params: [message, address],
-            });
-            await api('/wallet/bind', { address, signature });
-            await onLinked();
-          } catch (e) {
-            useUI.setState({ error: (e as Error).message });
-          } finally {
-            setLoading(false);
-          }
-        }}
-      >
-        {loading
-          ? 'AWAITING SIGNATURE...'
-          : me?.wallet?.address
-            ? 'VERIFY LINKED WALLET'
-            : 'LINK YOUR WALLET'}
-      </button>
-    </div>
+      <Web3Panel onRefresh={onLinked} />
+    </>
   );
 }
 createRoot(document.getElementById('root')!).render(<App />);

@@ -9,6 +9,7 @@ import {
   type CampaignProgress,
 } from '../../../packages/shared/src/missions';
 import { randomUUID, createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import {
   canonical,
   digest,
@@ -27,6 +28,7 @@ await db.exec(`CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY,value TEX
 CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY,name TEXT NOT NULL,demo INTEGER NOT NULL,hero INTEGER NOT NULL DEFAULT 0,progress TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS wallets(player_id TEXT PRIMARY KEY,address TEXT UNIQUE NOT NULL);
 CREATE TABLE IF NOT EXISTS wallet_nonces(player_id TEXT PRIMARY KEY,nonce TEXT NOT NULL,expires INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS revoked_sessions(digest TEXT PRIMARY KEY,expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS results (id TEXT PRIMARY KEY,demo INTEGER NOT NULL,payload TEXT NOT NULL,hash TEXT NOT NULL,created TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS participants (match_id TEXT NOT NULL,player_id TEXT NOT NULL,PRIMARY KEY(match_id,player_id));
 CREATE TABLE IF NOT EXISTS badges (player_id TEXT NOT NULL,badge TEXT NOT NULL,match_id TEXT NOT NULL,PRIMARY KEY(player_id,badge));
@@ -123,14 +125,20 @@ export async function createProfile(name: string, demo: boolean) {
   return (await profile(id))!;
 }
 export function token(p: Profile) {
-  const body = Buffer.from(JSON.stringify({ id: p.id, exp: Date.now() + 7 * 86400000 })).toString(
-    'base64url',
-  );
+  const body = Buffer.from(
+    JSON.stringify({ id: p.id, exp: Date.now() + 7 * 86400000, jti: randomUUID() }),
+  ).toString('base64url');
   return body + '.' + createHmac('sha256', secret).update(body).digest('base64url');
 }
 export class SessionError extends Error {}
+// Only token fingerprints are retained for revocation; bearer credentials are never stored.
+export const sessionEvents = new EventEmitter();
+sessionEvents.setMaxListeners(0);
+export const sessionFingerprint = (value: string) =>
+  createHmac('sha256', secret).update(value).digest('hex');
 export async function authenticate(t: unknown) {
-  if (typeof t !== 'string' || t.length > 2048) throw new SessionError('Session required');
+  if (typeof t !== 'string' || t.length > 2048 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(t))
+    throw new SessionError('Session required');
   const [body, sig] = t.split('.');
   const expected = createHmac('sha256', secret)
     .update(body ?? '')
@@ -149,9 +157,27 @@ export async function authenticate(t: unknown) {
   }
   if (typeof data.id !== 'string' || !Number.isFinite(data.exp))
     throw new SessionError('Invalid session');
+  if (
+    await db
+      .prepare('SELECT digest FROM revoked_sessions WHERE digest=?')
+      .get(sessionFingerprint(t))
+  )
+    throw new SessionError('Session revoked');
   const p = await profile(data.id);
   if (data.exp < Date.now() || !p) throw new SessionError('Session expired');
   return p;
+}
+export async function revokeSession(value: string) {
+  await authenticate(value);
+  const { exp } = JSON.parse(Buffer.from(value.split('.')[0], 'base64url').toString());
+  const fingerprint = sessionFingerprint(value);
+  await db.transaction(async () => {
+    await db.prepare('DELETE FROM revoked_sessions WHERE expires<?').run(Date.now());
+    await db
+      .prepare('INSERT OR IGNORE INTO revoked_sessions(digest,expires) VALUES (?,?)')
+      .run(fingerprint, exp);
+  })();
+  sessionEvents.emit('revoked', fingerprint);
 }
 async function resultIdentity(id: string): Promise<ResultIdentity> {
   // A disconnected player's AI substitute still belongs to the human profile.
@@ -269,6 +295,7 @@ export function recordResult(id: string, w: World, started: string) {
           damage: p.damage,
           kills: p.kills,
           contribution: p.contribution,
+          ...(p.squadId ? { squadId: p.squadId } : {}),
           ...(w.campaign ? { honor: p.honor ?? 0 } : {}),
         })),
       ),
@@ -342,13 +369,17 @@ export function recordResult(id: string, w: World, started: string) {
       if (p.progress.qualifying >= 10) await issueBadge(p.id, 'Ten Victories', id);
     }
     if (w.mode === 'squad') {
-      const squads = (await db
-        .prepare('SELECT * FROM squads WHERE demo=?')
-        .all(Number(w.demo))) as any[];
-      for (const squad of squads) {
-        const members = JSON.parse(squad.members) as string[];
-        const participant = w.players.find((p) => members.includes(p.id));
-        if (!participant) continue;
+      const squadIds = [
+        ...new Set(w.players.map((f) => f.squadId).filter((id): id is string => !!id)),
+      ];
+      for (const squadId of squadIds) {
+        const squad = await db
+          .prepare('SELECT * FROM squads WHERE id=? AND demo=?')
+          .get(squadId, Number(w.demo));
+        if (!squad) continue;
+        // Keep match-time attribution when a player later joins another team.
+        const members = w.players.filter((f) => f.squadId === squadId);
+        const participant = members[0];
         const win = participant.team === w.winner,
           rating = Math.max(0, squad.rating + (win ? 50 : -25)),
           wins = squad.wins + Number(win);
@@ -356,7 +387,7 @@ export function recordResult(id: string, w: World, started: string) {
           .prepare('UPDATE squads SET rating=?,wins=? WHERE id=?')
           .run(rating, wins, squad.id);
         for (const member of members) {
-          const p = await profile(member);
+          const p = await profile(member.id);
           if (p) {
             p.progress.squadRating = rating;
             p.progress.squadWins = wins;

@@ -21,6 +21,8 @@ export interface BracketMatch {
   a?: string;
   b?: string;
   winner?: string;
+  /** The recorded match result that decided this bracket match (absent for AI-only matches). */
+  matchId?: string;
 }
 export interface Tournament {
   id: string;
@@ -91,7 +93,8 @@ async function advance(t: Tournament) {
         p.progress.points += CHAMPION_POINTS;
         await saveProfile(p);
       }
-      await issueBadge(champion.id, 'Tournament Champion', 'tournament:' + t.id);
+      // Link the badge to the recorded final so it can be verified and claimed as a token.
+      await issueBadge(champion.id, 'Tournament Champion', final.matchId ?? 'tournament:' + t.id);
     }
     for (const e of t.entrants)
       await notify(e.id, 'tournament', `${champion.name} won the tournament!`, {
@@ -101,12 +104,18 @@ async function advance(t: Tournament) {
 }
 
 /** Called by the duel room once a tournament match result is saved. First result wins. */
-export async function reportTournamentMatch(id: string, key: MatchKey, winner: string) {
+export async function reportTournamentMatch(
+  id: string,
+  key: MatchKey,
+  winner: string,
+  matchId?: string,
+) {
   return db.transaction(async () => {
     const t = await tournament(id);
     const m = t?.bracket.find((b) => b.key === key);
     if (!t || !m || m.winner || ![m.a, m.b].includes(winner)) return;
     m.winner = winner;
+    m.matchId = matchId;
     const won = entrant(t, winner)!;
     if (!won.bot) {
       const p = await profile(won.id);

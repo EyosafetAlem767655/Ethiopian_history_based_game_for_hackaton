@@ -1,5 +1,7 @@
 # Sam's Web3 assessment and two-day learning plan
 
+**30 October 2026:** identity registration, earned-badge token claims, retry/reconciliation, match-long chat and security repairs are now implemented on `Sam-dev`. The initial assessment below is historical. See [the current handoff](SAM-REVIEW-HANDOFF.md) and [lesson 3](LESSON-03-REGISTRATION-REWARDS-AND-SECURITY.md). Public deployment/testnet verification and the separate spectator/replay/tournament/social work remain outstanding.
+
 Assessment date: 28 October 2026. Branch: `Sam-dev`. Baseline commit: `f63f0d7`.
 The tables below describe the initial assessment. Implementation progress is recorded at the end of this document.
 

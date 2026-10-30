@@ -4,6 +4,33 @@ process.env.DB_PATH = ':memory:';
 const store = await import('../apps/server/src/store');
 const { processOutbox } = await import('../apps/server/src/attestation');
 describe('trusted records', () => {
+  it('attributes a squad result to admitted players and the original team after membership changes', async () => {
+    const a = await store.createProfile('Participant', true),
+      b = await store.createProfile('Absent teammate', true),
+      c = await store.createProfile('New teammate', true);
+    await store.db
+      .prepare('INSERT INTO squads(id,code,name,demo,members) VALUES (?,?,?,?,?)')
+      .run('old-squad', 'OLDTEAM', 'Old team', 1, JSON.stringify([b.id]));
+    await store.db
+      .prepare('INSERT INTO squads(id,code,name,demo,members) VALUES (?,?,?,?,?)')
+      .run('new-squad', 'NEWTEAM', 'New team', 1, JSON.stringify([a.id, c.id]));
+    const w = world('squad', true),
+      f = fighter(a.id, a.name, 0);
+    f.squadId = 'old-squad';
+    w.players = [f, fighter('opponent', 'AI', 1, true)];
+    w.winner = 0;
+    w.finished = true;
+    await store.recordResult('roster-snapshot', w, new Date().toISOString());
+    expect(
+      await store.db.prepare('SELECT wins,rating FROM squads WHERE id=?').get('old-squad'),
+    ).toEqual({ wins: 1, rating: 1050 });
+    expect(
+      await store.db.prepare('SELECT wins,rating FROM squads WHERE id=?').get('new-squad'),
+    ).toEqual({ wins: 0, rating: 1000 });
+    expect((await store.profile(a.id))!.progress.squadWins).toBe(1);
+    expect((await store.profile(b.id))!.progress.squadWins).toBe(0);
+    expect((await store.profile(c.id))!.progress.squadWins).toBe(0);
+  });
   it('authenticates signed sessions and rejects tampering', async () => {
     const p = await store.createProfile('Tester', true);
     const t = store.token(p);

@@ -1404,10 +1404,47 @@ summary small {
 .lobby-chat {
   position: fixed;
   bottom: 15px;
-  right: 20px;
+  left: 20px;
+  max-width: min(360px, calc(100vw - 40px));
   background: #15272bf0;
   padding: 12px;
   z-index: 10;
+}
+.lobby-chat [role='log'] {
+  max-height: 130px;
+  overflow-y: auto;
+}
+.lobby-chat summary {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 6px;
+}
+.wallet-panel.web3-panel {
+  display: block;
+  margin-top: 24px;
+}
+.web3-panel h3 {
+  font-size: 24px;
+  margin: 0 0 16px;
+}
+.web3-panel p {
+  line-height: 1.6;
+  margin: 12px 0;
+}
+.web3-panel .hash {
+  overflow-wrap: anywhere;
+}
+.web3-panel button {
+  margin: 6px 12px 6px 0;
+}
+.web3-panel .badge {
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  max-width: 420px;
+  margin: 18px 0;
+  padding: 18px;
+  align-items: flex-start;
 }
 .lobby-chat p {
   font-size: 10px;

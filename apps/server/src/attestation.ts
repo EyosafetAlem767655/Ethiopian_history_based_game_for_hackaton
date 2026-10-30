@@ -41,7 +41,10 @@ export class BaseAttestation implements AttestationAdapter {
       throw Error('Live chain broadcasting is not authorized');
     this.key = privateKeyToAccount(process.env.ATTESTOR_PRIVATE_KEY as `0x${string}`);
     this.address = process.env.RECORDS_ADDRESS as Address;
-    this.rpc = http(process.env.BASE_SEPOLIA_RPC ?? 'https://sepolia.base.org');
+    this.rpc = http(process.env.BASE_SEPOLIA_RPC ?? 'https://sepolia.base.org', {
+      timeout: 8000,
+      retryCount: 0,
+    });
   }
   async submit(id: string, hash: `0x${string}`, winner: string) {
     const client = createPublicClient({ chain: baseSepolia, transport: this.rpc });
@@ -63,15 +66,34 @@ export class BaseAttestation implements AttestationAdapter {
         throw Error('On-chain result conflict');
       return { status: 'confirmed' as const };
     }
-    const tx = await wallet.writeContract({
+    const saved = await db.prepare('SELECT tx FROM outbox WHERE match_id=?').get(id);
+    const tx =
+      saved?.tx ??
+      (await wallet.writeContract({
+        address: this.address,
+        abi: recordsAbi,
+        functionName: 'attest',
+        args: [key, hash, winnerHash],
+      }));
+    await db.prepare('UPDATE outbox SET tx=? WHERE match_id=?').run(tx, id);
+    const receipt = await client.waitForTransactionReceipt({
+      hash: tx,
+      confirmations: 2,
+      timeout: 30000,
+      pollingInterval: 2000,
+    });
+    if (receipt.status !== 'success') {
+      await db.prepare('UPDATE outbox SET tx=NULL WHERE match_id=? AND tx=?').run(id, tx);
+      throw Error('Transaction reverted');
+    }
+    const anchored = await client.readContract({
       address: this.address,
       abi: recordsAbi,
-      functionName: 'attest',
-      args: [key, hash, winnerHash],
+      functionName: 'records',
+      args: [key],
     });
-    await db.prepare('UPDATE outbox SET tx=? WHERE match_id=?').run(tx, id);
-    const receipt = await client.waitForTransactionReceipt({ hash: tx });
-    if (receipt.status !== 'success') throw Error('Transaction reverted');
+    if (anchored[0] !== hash || anchored[1] !== winnerHash || anchored[2] === 0n)
+      throw Error('On-chain result conflict');
     return { status: 'confirmed' as const, tx };
   }
 }
@@ -82,7 +104,7 @@ export async function processOutbox(adapter: AttestationAdapter) {
   try {
     const rows = (await db
       .prepare(
-        `SELECT o.*,r.hash,r.payload,r.demo FROM outbox o JOIN results r ON r.id=o.match_id WHERE o.status IN ('pending','failed') AND o.attempts<5`,
+        `SELECT o.*,r.hash,r.payload,r.demo FROM outbox o JOIN results r ON r.id=o.match_id WHERE o.status IN ('pending','failed') AND o.attempts<5 ORDER BY r.created LIMIT 3`,
       )
       .all()) as any[];
     for (const row of rows) {
@@ -110,7 +132,17 @@ export async function processOutbox(adapter: AttestationAdapter) {
       } catch (e) {
         await db
           .prepare('UPDATE outbox SET status=?,error=? WHERE match_id=?')
-          .run('failed', (e as Error).message, row.match_id);
+          .run(
+            'failed',
+            [
+              'Stored result hash mismatch',
+              'On-chain result conflict',
+              'Transaction reverted',
+            ].includes((e as Error).message)
+              ? (e as Error).message
+              : 'Blockchain request failed. Retry after checking the network.',
+            row.match_id,
+          );
       }
     }
   } finally {

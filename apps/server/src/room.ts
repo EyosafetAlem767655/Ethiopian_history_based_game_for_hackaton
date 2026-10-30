@@ -23,6 +23,12 @@ const MODE_LABELS: Record<string, string> = {
   squad: '4v4 Banner Conquest',
   quest: 'Royal Quest',
 };
+import {
+  guardRoomSession,
+  recheckRoomSession,
+  forgetRoomSessions,
+  forgetClientSession,
+} from './session-guard';
 export class BattleRoom extends Room {
   maxClients = 8;
   maxMessagesPerSecond = 80;
@@ -141,6 +147,8 @@ export class BattleRoom extends Room {
     if (this.w.mode === 'squad' && p.progress.stage < 2) throw Error('Stage 2 is locked');
     if (this.w.mode === 'quest' && p.progress.stage < 3) throw Error('Stage 3 is locked');
     if (['squad', 'quest'].includes(this.w.mode)) {
+      if (this.w.mode === 'quest' && o.squadId !== this.metadata.squadId)
+        throw Error('This is another squad’s quest');
       const s = (await db
         .prepare('SELECT members FROM squads WHERE id=? AND demo=?')
         .get(o.squadId ?? '', p.demo)) as any;
@@ -155,6 +163,7 @@ export class BattleRoom extends Room {
       )
         throw Error('Your team is full');
     }
+    guardRoomSession(this, _c, o.token);
     return p;
   }
   async onJoin(
@@ -168,11 +177,25 @@ export class BattleRoom extends Room {
     const p = auth ?? (c.auth as Profile);
     if (this.elapsed > this.waitFor && this.w.mode !== 'quest')
       throw Error('Match already started');
+    if ([...this.joinIds.values()].includes(p.id)) throw Error('Already in this match');
     this.joinIds.set(c.sessionId, p.id);
     p.hero = Math.max(0, Math.min(3, Number(o.hero) || 0));
-    await db.prepare('UPDATE profiles SET hero=? WHERE id=?').run(p.hero, p.id);
+    try {
+      await db.prepare('UPDATE profiles SET hero=? WHERE id=?').run(p.hero, p.id);
+    } catch (e) {
+      this.joinIds.delete(c.sessionId);
+      throw e;
+    }
     let team = this.w.mode === 'duel' ? this.w.players.length : 0;
     if (this.w.mode === 'squad') {
+      if (
+        (!this.teams.has(o.squadId!) && this.teams.size >= 2) ||
+        (this.teams.has(o.squadId!) &&
+          this.w.players.filter((f) => f.team === this.teams.get(o.squadId!)).length >= 4)
+      ) {
+        this.joinIds.delete(c.sessionId);
+        throw Error('Both squads are full');
+      }
       if (!this.teams.has(o.squadId!)) this.teams.set(o.squadId!, this.teams.size);
       team = this.teams.get(o.squadId!)!;
     }
@@ -197,6 +220,7 @@ export class BattleRoom extends Room {
     }
     f.avatar = p.avatar;
     f.armor = equippedArmor(p);
+    if (['squad', 'quest'].includes(this.w.mode)) f.squadId = o.squadId;
     this.w.players.push(f);
     c.send('identity', { id: p.id, room: this.roomId });
     c.send('snapshot', this.w);
@@ -209,18 +233,33 @@ export class BattleRoom extends Room {
     if (this.w.mode !== 'quest') await this.lock();
     p.bot = true;
     this.inputs.delete(id);
+    let reconnected: Client | undefined;
     if (!consented) {
       try {
-        const reconnected = await this.allowReconnection(c, 30);
+        reconnected = await this.allowReconnection(c, 30);
+        await recheckRoomSession(this, c, reconnected);
         if (this.maxClients > 1) await assertHumanBand(p.id, this.metadata.ageBand);
+        if (this.w.mode === 'quest') {
+          const squad = await db
+            .prepare('SELECT members FROM squads WHERE id=?')
+            .get(this.metadata.squadId);
+          if (!squad || !JSON.parse(squad.members).includes(p.id))
+            throw Error('Squad membership changed');
+        }
         p.bot = false;
         reconnected.send('snapshot', this.w);
         if (this.recorded) reconnected.send('result', { matchId: this.roomId });
         return;
       } catch {
+        reconnected?.leave(4001, 'Session or membership changed');
         /* bot retains the slot */
       }
     }
+    forgetClientSession(this, c);
+  }
+  onDispose() {
+    forgetRoomSessions(this);
+    unregisterLive(this.roomId);
   }
   update() {
     if (this.w.finished) {
@@ -300,9 +339,6 @@ export class BattleRoom extends Room {
       publishSnapshot(this.roomId, this.w);
     }
   }
-  onDispose() {
-    unregisterLive(this.roomId);
-  }
   /** The tournament entrant who won: the winning human, otherwise the absent or AI opponent. */
   async tournamentWinner() {
     const t = this.tournament!;
@@ -333,7 +369,8 @@ export class BattleRoom extends Room {
           ).catch(() => {});
       if (this.tournament) {
         const winner = await this.tournamentWinner();
-        if (winner) await reportTournamentMatch(this.tournament.id, this.tournament.key, winner);
+        if (winner)
+          await reportTournamentMatch(this.tournament.id, this.tournament.key, winner, this.roomId);
       }
       this.clock.setTimeout(() => {
         void this.disconnect();

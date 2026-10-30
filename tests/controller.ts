@@ -89,8 +89,22 @@ export function control(w: World, id: string, seq: number): Input {
     }
   }
   if (w.mode === 'squad') {
-    tx = 600;
-    ty = 380;
+    // Exercise capture objectives rather than camp one contested zone and assume
+    // an automatic win against randomly assigned bot roles.
+    const target =
+      [...w.zones]
+        .filter((z) => z.owner !== p.team)
+        .sort((a, b) => {
+          const cost = (z: { x: number; y: number }) =>
+            Math.hypot(z.x - p.x, z.y - p.y) +
+            300 *
+              w.players.filter(
+                (q) => q.team !== p.team && q.hp > 0 && Math.hypot(q.x - z.x, q.y - z.y) < 180,
+              ).length;
+          return cost(a) - cost(b);
+        })[0] ?? w.zones[1];
+    tx = target.x;
+    ty = target.y;
     attack = true;
   }
   if (w.mode === 'quest') {
@@ -114,10 +128,14 @@ export function control(w: World, id: string, seq: number): Input {
   const target =
     w.mode === 'quest' && ['guardian', 'challenge', 'eclipse'].includes(w.phase)
       ? { x: w.bossX, y: w.bossY }
-      : (w.players.find((q) => q.team !== p.team) ?? { x: 700, y: 350 });
+      : ([...w.players]
+          .filter((q) => q.team !== p.team && q.hp > 0)
+          .sort(
+            (a, b) => Math.hypot(a.x - p.x, a.y - p.y) - Math.hypot(b.x - p.x, b.y - p.y),
+          )[0] ?? { x: 700, y: 350 });
   return {
     seq,
-    ...direction(p, tx, ty),
+    ...direction(p, tx, ty, w.geometry),
     aim: Math.atan2(target.y - p.y, target.x - p.x),
     attack,
     block,

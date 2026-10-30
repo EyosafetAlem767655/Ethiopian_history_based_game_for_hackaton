@@ -235,6 +235,9 @@ export class IsoArena extends Phaser.Scene {
       document.removeEventListener('focusout', focusOut);
     });
     this.input.mouse!.disableContextMenu();
+    // Clicking the field must return focus from chat, sliders and checkboxes.
+    this.game.canvas.tabIndex = 0;
+    this.game.canvas.setAttribute('aria-label', 'Battle arena. Click to focus game controls.');
     this.cameras.main.setZoom(this.zoomLevel);
     this.keys.SPACE.on('down', () => (this.queued.dodge = true));
     this.keys.Q.on('down', () => (this.queued.ability = true));
@@ -255,6 +258,7 @@ export class IsoArena extends Phaser.Scene {
       else if (target.requestFullscreen) void target.requestFullscreen().catch(() => {});
     });
     this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
+      this.game.canvas.focus({ preventScroll: true });
       audio.unlock();
       if (p.leftButtonDown()) this.queued.attack = true;
     });

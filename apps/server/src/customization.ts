@@ -12,7 +12,8 @@ import {
   birthInput,
   type AgeEligibility,
 } from '../../../packages/shared/src/customization';
-import { db } from './database';
+import { db, persistence } from './database';
+import { queueMediaDeletion, cancelMediaDeletion, removeMedia } from './media';
 import { supabase, isHosted } from './hosted';
 import { notify } from './notify';
 import { claimPendingPerks } from './store';
@@ -26,6 +27,15 @@ const REVIEW_MESSAGES: Record<string, string> = {
 await db.exec(`CREATE TABLE IF NOT EXISTS avatars(player_id TEXT PRIMARY KEY,data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS age_reviews(id TEXT PRIMARY KEY,player_id TEXT NOT NULL,status TEXT NOT NULL,path TEXT,birth_date TEXT,created INTEGER NOT NULL,expires INTEGER NOT NULL,reviewer TEXT,reviewed INTEGER);
 CREATE UNIQUE INDEX IF NOT EXISTS one_pending_review ON age_reviews(player_id) WHERE status='pending';`);
+if (persistence === 'sqlite') {
+  const columns = await db.prepare('PRAGMA table_info(age_reviews)').all();
+  for (const [name, type] of [
+    ['upload_path', 'TEXT'],
+    ['upload_expires', 'INTEGER NOT NULL DEFAULT 0'],
+  ])
+    if (!columns.some((c) => c.name === name))
+      await db.exec(`ALTER TABLE age_reviews ADD COLUMN ${name} ${type};`);
+}
 export async function readAvatar(id: string) {
   const row = await db.prepare('SELECT data FROM avatars WHERE player_id=?').get(id);
   try {
@@ -88,12 +98,12 @@ function imageType(bytes: Buffer) {
   return '';
 }
 async function deleteEvidence(row: any) {
-  if (!row.path || !supabase) return;
-  const out = await supabase.storage.from('age-evidence').remove([row.path]);
-  if (!out.error)
-    await db
-      .prepare('UPDATE age_reviews SET path=NULL WHERE id=? AND path=?')
-      .run(row.id, row.path);
+  if (!supabase) return;
+  for (const path of [row.path, row.upload_path])
+    if (path) {
+      await queueMediaDeletion('age-evidence', path, path === row.upload_path ? 120000 : 0);
+      await removeMedia(supabase, 'age-evidence', path);
+    }
 }
 export function registerCustomization(app: Express) {
   app.put('/api/avatar', async (q, r) => {
@@ -133,8 +143,7 @@ export function registerCustomization(app: Express) {
       return;
     }
     const id = randomUUID(),
-      now = Date.now(),
-      path = p.id + '/' + id;
+      now = Date.now();
     await db.transaction(async () => {
       await db
         .prepare(
@@ -151,7 +160,7 @@ export function registerCustomization(app: Express) {
         .prepare(
           'INSERT INTO age_reviews(id,player_id,status,path,birth_date,created,expires) VALUES (?,?,?,?,?,?,?)',
         )
-        .run(id, p.id, 'pending', path, birth, now, now + 86400000);
+        .run(id, p.id, 'pending', null, birth, now, now + 86400000);
     })();
     await notify(
       p.id,
@@ -165,43 +174,61 @@ export function registerCustomization(app: Express) {
     '/api/age-review/:id/evidence',
     express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '5mb' }),
     async (q, r) => {
-      const saved = await db.transaction(async () => {
+      const bytes = q.body;
+      const type = Buffer.isBuffer(bytes) ? imageType(bytes) : '';
+      if (
+        !supabase ||
+        q.headers['x-document-consent'] !== 'true' ||
+        !type ||
+        type !== q.headers['content-type']
+      ) {
+        r.status(400).json({ error: 'Consent and a valid JPEG, PNG or WebP image are required.' });
+        return;
+      }
+      const expires = Date.now() + 120000;
+      const reservation = await db.transaction(async () => {
         const row = await db
           .prepare("SELECT * FROM age_reviews WHERE id=? AND player_id=? AND status='pending'")
           .get(q.params.id, r.locals.player.id);
-        if (!supabase || !row || Number(row.expires) <= Date.now()) {
-          r.status(403).json({ error: 'Submission expired or unavailable' });
-          return;
-        }
-        const bytes = q.body;
-        // Hold a row lock through upload: scheduled expiry must not delete/ack a path before its late upload finishes.
-        const locked = await db
-          .prepare(
-            "UPDATE age_reviews SET status=status WHERE id=? AND status='pending' AND expires>?",
-          )
-          .run(row.id, Date.now());
-        if (!locked.changes) {
-          r.status(409).json({ error: 'Submission expired. Please resubmit.' });
-          return;
-        }
-        const type = Buffer.isBuffer(bytes) ? imageType(bytes) : '';
         if (
-          q.headers['x-document-consent'] !== 'true' ||
-          !type ||
-          type !== q.headers['content-type']
-        ) {
-          r.status(400).json({
-            error: 'Consent and a valid JPEG, PNG or WebP image are required.',
-          });
-          return;
-        }
+          !row ||
+          Number(row.expires) <= Date.now() ||
+          row.path ||
+          (row.upload_path && Number(row.upload_expires) > Date.now())
+        )
+          throw Error('Submission expired, already uploaded, or upload in progress');
+        const path = row.player_id + '/' + row.id + '/' + randomUUID();
+        await queueMediaDeletion('age-evidence', path, 120000);
+        await db
+          .prepare('UPDATE age_reviews SET upload_path=?,upload_expires=? WHERE id=?')
+          .run(path, expires, row.id);
+        return { id: row.id, path };
+      })();
+      try {
         const out = await supabase.storage
           .from('age-evidence')
-          .upload(row.path, bytes, { contentType: type, upsert: false, cacheControl: '0' });
+          .upload(reservation.path, bytes, { contentType: type, upsert: false, cacheControl: '0' });
         if (out.error) throw Error('Document upload failed. Withdraw and resubmit.');
-        return { status: 'pending', label: 'Awaiting manual document review' };
-      })();
-      if (saved) r.json(saved);
+        await db.transaction(async () => {
+          if (expires <= Date.now()) throw Error('Upload expired. Please retry.');
+          const result = await db
+            .prepare(
+              "UPDATE age_reviews SET path=?,upload_path=NULL,upload_expires=0 WHERE id=? AND upload_path=? AND status='pending' AND expires>?",
+            )
+            .run(reservation.path, reservation.id, reservation.path, Date.now());
+          if (!result.changes) throw Error('Upload was cancelled, reviewed or expired');
+          await cancelMediaDeletion('age-evidence', reservation.path);
+        })();
+        r.json({ status: 'pending', label: 'Awaiting manual document review' });
+      } catch (e) {
+        await db
+          .prepare(
+            'UPDATE age_reviews SET upload_path=NULL,upload_expires=0 WHERE id=? AND upload_path=?',
+          )
+          .run(reservation.id, reservation.path);
+        await removeMedia(supabase, 'age-evidence', reservation.path);
+        throw e;
+      }
     },
   );
   app.delete('/api/age-review', async (_q, r) => {
@@ -260,22 +287,38 @@ export function registerCustomization(app: Express) {
     );
   });
   app.post('/api/admin/age-reviews/:id', async (q, r) => {
+    const v = z
+      .object({
+        decision: z.enum(['approved', 'rejected', 'resubmit']),
+        acknowledged: z.literal(true),
+        birth: birthInput.optional(),
+      })
+      .strict()
+      .parse(q.body);
+    const birth = v.decision === 'approved' && v.birth ? birthISO(v.birth) : null;
+    const snapshot = await db
+      .prepare("SELECT * FROM age_reviews WHERE id=? AND status='pending' AND expires>?")
+      .get(q.params.id, Date.now());
+    if (!snapshot) {
+      r.status(409).json({ error: 'This request is no longer pending.' });
+      return;
+    }
+    if (v.decision === 'approved') {
+      if (!birth || !ageBand(birth))
+        throw Error('Review the complete calendar-confirmed adult birth date.');
+      if (!snapshot.path || snapshot.upload_path) {
+        r.status(409).json({ error: 'Evidence has not finished uploading.' });
+        return;
+      }
+      const evidence = await supabase!.storage.from('age-evidence').download(snapshot.path);
+      if (evidence.error || !evidence.data) throw Error('Evidence is unavailable.');
+    }
     const saved = await db.transaction(async () => {
-      const v = z
-        .object({
-          decision: z.enum(['approved', 'rejected', 'resubmit']),
-          acknowledged: z.literal(true),
-          birth: birthInput.optional(),
-        })
-        .strict()
-        .parse(q.body);
       const row = await db
         .prepare("SELECT * FROM age_reviews WHERE id=? AND status='pending' AND expires>?")
         .get(q.params.id, Date.now());
-      if (!row) {
-        r.status(409).json({ error: 'This request is no longer pending.' });
-        return;
-      }
+      if (!row || (v.decision === 'approved' && (row.path !== snapshot.path || row.upload_path)))
+        throw Object.assign(Error('Request changed. Refresh before reviewing.'), { status: 409 });
       const owner = await db
         .prepare('SELECT id,auth_id FROM hosted_identities WHERE id=?')
         .get(row.player_id);
@@ -283,34 +326,23 @@ export function registerCustomization(app: Express) {
         r.status(403).json({ error: 'Another authorized reviewer must review your own document.' });
         return;
       }
-      const birth = v.decision === 'approved' && v.birth ? birthISO(v.birth) : null;
-      if (v.decision === 'approved') {
-        if (!birth || !ageBand(birth))
-          throw Error(
-            'Review the complete calendar-confirmed date of birth; approval requires age 18+.',
-          );
-        const evidence = await supabase!.storage.from('age-evidence').download(row.path);
-        if (evidence.error || !evidence.data)
-          throw Error('Evidence has not been uploaded or is unavailable.');
-      }
-      const result = await db
+      await queueMediaDeletion('age-evidence', row.path);
+      await queueMediaDeletion('age-evidence', row.upload_path, 120000);
+      await db
         .prepare(
-          "UPDATE age_reviews SET status=?,birth_date=?,reviewer=?,reviewed=? WHERE id=? AND status='pending' AND expires>?",
+          'UPDATE age_reviews SET status=?,birth_date=?,reviewer=?,reviewed=?,path=NULL,upload_path=NULL,upload_expires=0 WHERE id=?',
         )
-        .run(v.decision, birth, r.locals.reviewer, Date.now(), row.id, Date.now());
-      if (!result.changes) {
-        r.status(409).json({ error: 'Request changed. Refresh before reviewing.' });
-        return;
-      }
-      await deleteEvidence(row);
-      return { status: v.decision, player: row.player_id as string };
+        .run(v.decision, birth, r.locals.reviewer, Date.now(), row.id);
+      return row;
     })();
-    if (!saved) return;
-    // Tell the player their eligibility, and release perks that were waiting on verification.
-    await notify(saved.player, 'age-review', REVIEW_MESSAGES[saved.status], {
-      status: saved.status,
-    });
-    if (saved.status === 'approved') await claimPendingPerks(saved.player);
-    r.json({ status: saved.status });
+    if (saved) {
+      await deleteEvidence(saved);
+      // Tell the player their eligibility, and release perks that were waiting on verification.
+      await notify(saved.player_id, 'age-review', REVIEW_MESSAGES[v.decision], {
+        status: v.decision,
+      });
+      if (v.decision === 'approved') await claimPendingPerks(saved.player_id);
+      r.json({ status: v.decision });
+    }
   });
 }

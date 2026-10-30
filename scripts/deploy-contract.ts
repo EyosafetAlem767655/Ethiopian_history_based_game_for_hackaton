@@ -8,14 +8,21 @@ if (process.env.ALLOW_CHAIN_BROADCAST !== 'true' || !process.env.ATTESTOR_PRIVAT
 const account = privateKeyToAccount(process.env.ATTESTOR_PRIVATE_KEY as `0x${string}`),
   transport = http(process.env.BASE_SEPOLIA_RPC ?? 'https://sepolia.base.org');
 const c = compile();
+const metadata = process.env.BADGE_METADATA_URI;
+if (
+  !metadata ||
+  !metadata.includes('{id}') ||
+  !/^(https:\/\/|ipfs:\/\/)/.test(metadata) ||
+  metadata.includes('example.invalid')
+)
+  throw Error(
+    'Set BADGE_METADATA_URI to a real HTTPS/IPFS ERC-1155 metadata endpoint containing {id} before deploying',
+  );
 const wallet = createWalletClient({ account, chain: baseSepolia, transport });
 const tx = await wallet.deployContract({
   abi: c.abi,
   bytecode: ('0x' + c.evm.bytecode.object) as `0x${string}`,
-  args: [
-    account.address,
-    process.env.BADGE_METADATA_URI ?? 'https://example.invalid/achievements/{id}.json',
-  ],
+  args: [account.address, metadata],
 });
 console.log('Deployment submitted:', tx);
 const receipt = await createPublicClient({

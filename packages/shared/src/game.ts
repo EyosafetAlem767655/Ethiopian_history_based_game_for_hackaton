@@ -31,6 +31,7 @@ export function shuffledRoles(random: () => number = Math.random): Role[] {
   return roles;
 }
 export interface Fighter {
+  squadId?: string;
   avatar?: AvatarSpec;
   /** Unlocked cosmetic armor set, e.g. 'royal-feast' from the lunch gathering perk. */
   armor?: string;

@@ -86,7 +86,7 @@ it('runs a four-seat bracket with AI fill and rewards the champion', async () =>
           : [m.a, m.b].includes(Bethel.id)
             ? [m.a, m.b].find((id) => id !== Bethel.id)!
             : m.a;
-        await tournaments.reportTournamentMatch(t.id, m.key, winner);
+        await tournaments.reportTournamentMatch(t.id, m.key, winner, m.key + '-room');
       }
   }
   const done = (await tournaments.tournament(t.id))!;
@@ -94,7 +94,13 @@ it('runs a four-seat bracket with AI fill and rewards the champion', async () =>
   expect(done.winner).toBe(Abebe.id);
   const after = (await store.profile(Abebe.id))!.progress.points;
   expect(after - pointsBefore).toBe(2 * tournaments.MATCH_WIN_POINTS + tournaments.CHAMPION_POINTS);
-  expect((await store.badges(Abebe.id)).map((b: any) => b.badge)).toContain('Tournament Champion');
+  const champion = (await store.badges(Abebe.id)).find(
+    (b: any) => b.badge === 'Tournament Champion',
+  );
+  // Linked to the recorded final so it can be verified and claimed as ERC-1155 token #12.
+  expect(champion?.match_id).toBe('final-room');
+  const { badgeTokenId } = await import('../packages/shared/src/web3');
+  expect(badgeTokenId('Tournament Champion')).toBe(12);
   const feed = (await call('Abebe', '/notifications')).body.map((n: any) => n.text);
   expect(
     feed.some((text: string) => text.includes('Achievement unlocked: Tournament Champion')),
