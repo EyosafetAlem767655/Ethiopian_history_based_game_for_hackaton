@@ -14,7 +14,14 @@ import {
 } from '../../../packages/shared/src/game';
 import { authenticate, recordResult, saveProfile, db, type Profile } from './store';
 import { z } from 'zod';
+import { installRoomChat } from './room-chat';
 import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
+import {
+  guardRoomSession,
+  recheckRoomSession,
+  forgetRoomSessions,
+  forgetClientSession,
+} from './session-guard';
 export class BattleRoom extends Room {
   maxClients = 8;
   maxMessagesPerSecond = 80;
@@ -29,6 +36,7 @@ export class BattleRoom extends Room {
   teams = new Map<string, number>();
   roleOrders = [shuffledRoles(), shuffledRoles()];
   eventLog: GameEvent[] = [];
+  sendChatHistory!: (client: Client) => void;
   loggedEvents = new Set<string>();
   onCreate(o: { ageBand?: string; mode?: Mode; demo?: boolean; squadId?: string }) {
     const mode = z.enum(['tutorial', 'duel', 'squad', 'quest']).parse(o.mode ?? 'duel');
@@ -53,23 +61,7 @@ export class BattleRoom extends Room {
       if (prev && result.data.seq <= prev.seq) return;
       this.inputs.set(id, result.data);
     });
-    this.onMessage('chat', (c, data) => {
-      if (this.elapsed > 5 || typeof data !== 'string' || data.length > 200) return;
-      const now = Date.now();
-      const last =
-        (
-          c.userData as {
-            chat?: number;
-          }
-        )?.chat ?? 0;
-      if (now - last < 1000) return;
-      c.userData = { chat: now };
-      this.broadcast('chat', {
-        name: (c.auth as Profile).name,
-        text: data.replace(/[<>]/g, ''),
-        at: now,
-      });
-    });
+    this.sendChatHistory = installRoomChat(this, mode === 'quest');
     let accumulator = 0;
     this.setSimulationInterval((delta) => {
       accumulator += Math.min(delta, 250);
@@ -105,6 +97,8 @@ export class BattleRoom extends Room {
     if (this.w.mode === 'squad' && p.progress.stage < 2) throw Error('Stage 2 is locked');
     if (this.w.mode === 'quest' && p.progress.stage < 3) throw Error('Stage 3 is locked');
     if (['squad', 'quest'].includes(this.w.mode)) {
+      if (this.w.mode === 'quest' && o.squadId !== this.metadata.squadId)
+        throw Error('This is another squad’s quest');
       const s = (await db
         .prepare('SELECT members FROM squads WHERE id=? AND demo=?')
         .get(o.squadId ?? '', p.demo)) as any;
@@ -119,6 +113,7 @@ export class BattleRoom extends Room {
       )
         throw Error('Your team is full');
     }
+    guardRoomSession(this, _c, o.token);
     return p;
   }
   async onJoin(
@@ -131,11 +126,25 @@ export class BattleRoom extends Room {
   ) {
     const p = auth ?? (c.auth as Profile);
     if (this.elapsed > 5 && this.w.mode !== 'quest') throw Error('Match already started');
+    if ([...this.joinIds.values()].includes(p.id)) throw Error('Already in this match');
     this.joinIds.set(c.sessionId, p.id);
     p.hero = Math.max(0, Math.min(3, Number(o.hero) || 0));
-    await db.prepare('UPDATE profiles SET hero=? WHERE id=?').run(p.hero, p.id);
+    try {
+      await db.prepare('UPDATE profiles SET hero=? WHERE id=?').run(p.hero, p.id);
+    } catch (e) {
+      this.joinIds.delete(c.sessionId);
+      throw e;
+    }
     let team = this.w.mode === 'duel' ? this.w.players.length : 0;
     if (this.w.mode === 'squad') {
+      if (
+        (!this.teams.has(o.squadId!) && this.teams.size >= 2) ||
+        (this.teams.has(o.squadId!) &&
+          this.w.players.filter((f) => f.team === this.teams.get(o.squadId!)).length >= 4)
+      ) {
+        this.joinIds.delete(c.sessionId);
+        throw Error('Both squads are full');
+      }
       if (!this.teams.has(o.squadId!)) this.teams.set(o.squadId!, this.teams.size);
       team = this.teams.get(o.squadId!)!;
     }
@@ -159,9 +168,11 @@ export class BattleRoom extends Room {
       f.hp = replacement.hp;
     }
     f.avatar = p.avatar;
+    if (['squad', 'quest'].includes(this.w.mode)) f.squadId = o.squadId;
     this.w.players.push(f);
     c.send('identity', { id: p.id, room: this.roomId });
     c.send('snapshot', this.w);
+    this.sendChatHistory(c);
   }
   async onLeave(c: Client, consented: boolean) {
     const id = this.joinIds.get(c.sessionId);
@@ -171,18 +182,33 @@ export class BattleRoom extends Room {
     if (this.w.mode !== 'quest') await this.lock();
     p.bot = true;
     this.inputs.delete(id);
+    let reconnected: Client | undefined;
     if (!consented) {
       try {
-        const reconnected = await this.allowReconnection(c, 30);
+        reconnected = await this.allowReconnection(c, 30);
+        await recheckRoomSession(this, c, reconnected);
         if (this.maxClients > 1) await assertHumanBand(p.id, this.metadata.ageBand);
+        if (this.w.mode === 'quest') {
+          const squad = await db
+            .prepare('SELECT members FROM squads WHERE id=?')
+            .get(this.metadata.squadId);
+          if (!squad || !JSON.parse(squad.members).includes(p.id))
+            throw Error('Squad membership changed');
+        }
         p.bot = false;
         reconnected.send('snapshot', this.w);
+        this.sendChatHistory(reconnected);
         if (this.recorded) reconnected.send('result', { matchId: this.roomId });
         return;
       } catch {
+        reconnected?.leave(4001, 'Session or membership changed');
         /* bot retains the slot */
       }
     }
+    forgetClientSession(this, c);
+  }
+  onDispose() {
+    forgetRoomSessions(this);
   }
   update() {
     if (this.w.finished) {

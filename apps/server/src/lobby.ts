@@ -2,6 +2,7 @@ import { assertHumanBand, readAvatar } from './customization';
 import { ageBands } from '../../../packages/shared/src/customization';
 import { Room, type Client } from '@colyseus/core';
 import { authenticate, db, type Profile } from './store';
+import { guardRoomSession, forgetRoomSessions, forgetClientSession } from './session-guard';
 export class SquadLobby extends Room {
   maxClients = 4;
   maxMessagesPerSecond = 10;
@@ -63,21 +64,29 @@ export class SquadLobby extends Room {
     },
   ) {
     const p = await authenticate(o.token);
+    if (o.squadId !== this.metadata.squadId) throw Error('This is another squad’s lobby');
     if (this.maxClients > 1) await assertHumanBand(p.id, this.metadata.ageBand);
     const s = (await db
       .prepare('SELECT members FROM squads WHERE id=? AND demo=?')
       .get(o.squadId, p.demo)) as any;
     if (!s || !JSON.parse(s.members).includes(p.id)) throw Error('Squad membership required');
     if ([...this.members.values()].some((m) => m.id === p.id)) throw Error('Already in lobby');
+    guardRoomSession(this, _c, o.token);
     return p;
   }
   onJoin(c: Client, _o: unknown, p: Profile) {
+    // Admission must remain unique even when two async onAuth calls overlap.
+    if ([...this.members.values()].some((m) => m.id === p.id)) throw Error('Already in lobby');
     this.members.set(c.sessionId, { id: p.id, name: p.name, ready: false });
     this.broadcast('members', [...this.members.values()]);
   }
   onLeave(c: Client) {
+    forgetClientSession(this, c);
     this.members.delete(c.sessionId);
     this.lastChat.delete(c.sessionId);
     this.broadcast('members', [...this.members.values()]);
+  }
+  onDispose() {
+    forgetRoomSessions(this);
   }
 }

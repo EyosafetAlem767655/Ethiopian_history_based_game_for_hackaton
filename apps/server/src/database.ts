@@ -120,4 +120,6 @@ export const db = {
 };
 export async function checkDatabase() {
   await db.prepare('SELECT id FROM profiles LIMIT 1').all();
+  await db.prepare('SELECT digest FROM revoked_sessions LIMIT 1').all();
+  await db.prepare('SELECT id FROM team_messages LIMIT 1').all();
 }

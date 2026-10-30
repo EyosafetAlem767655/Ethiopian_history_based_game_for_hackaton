@@ -17,7 +17,7 @@ import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
 import type { Mode, World } from '../../../packages/shared/src/game';
 import './style.css';
 import './expansion.css';
-import { hostedAuth, resumeHosted, signInEmail } from './hostedAuth';
+import { hostedAuth, resumeHosted, signInEmail, signOutIdentity } from './hostedAuth';
 const heroes = [
   {
     name: 'The Lion Guard',
@@ -1046,12 +1046,11 @@ function App() {
                 <button
                   className="outline-btn"
                   style={{ marginTop: 25, marginLeft: 12 }}
-                  onClick={() => {
-                    localStorage.removeItem('knights-session');
-                    useUI.setState({ session: null, me: null });
+                  onClick={() => action(async () => {
+                    await signOutIdentity();
                     setSquad(null);
                     setPage('identity');
-                  }}
+                  })}
                 >
                   CHANGE IDENTITY / SIGN OUT
                 </button>

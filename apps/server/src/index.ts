@@ -11,9 +11,9 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Server } from '@colyseus/core';
+import { GuardedGameServer } from './matchmaking';
 import { SharedGameTransport } from './transport';
-import { currentSquad, registerTeamChat } from './chat';
+import { currentSquad, registerTeamChat, notifyTeamMembershipChanged } from './chat';
 import { resultProof } from './result-proof';
 import { z } from 'zod';
 import type { Address, Hex } from 'viem';
@@ -34,6 +34,7 @@ import { MISSIONS, DEMO_MISSIONS } from '../../../packages/shared/src/missions';
 import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
 import {
   authenticate,
+  revokeSession,
   createProfile,
   token,
   profile,
@@ -52,6 +53,8 @@ app.set('trust proxy', 1);
 asyncRoutes(app);
 app.use((_q, r, next) => {
   r.setHeader('X-Request-ID', randomUUID());
+  r.setHeader('X-Content-Type-Options', 'nosniff');
+  if (_q.path.startsWith('/api/')) r.setHeader('Cache-Control', 'no-store');
   next();
 });
 app.use(
@@ -152,6 +155,10 @@ app.get('/api/me', async (_q, r) => {
     avatar: await readAvatar(p.id),
     age: await eligibility(p.id),
   });
+});
+app.post('/api/session/logout', async (q, r) => {
+  await revokeSession(q.headers.authorization!.replace('Bearer ', ''));
+  r.json({ signedOut: true });
 });
 app.get('/api/results/:id/proof', async (q, r) => {
   const proof = await resultProof(q.params.id, r.locals.player.id);
@@ -272,7 +279,10 @@ app.post('/api/squad', async (q, r) => {
       ),
     };
   })();
-  if (result) r.json(result);
+  if (result) {
+    notifyTeamMembershipChanged(r.locals.player.id);
+    r.json(result);
+  }
 });
 app.post('/api/gathering/demo', async (q, r) => {
   const p = (await profile(r.locals.player.id))!;
@@ -358,7 +368,8 @@ app.use((err: Error, _q: express.Request, r: express.Response, _n: express.NextF
   });
 });
 const http = createServer(app);
-const server = new Server({ transport: new SharedGameTransport(http) });
+http.requestTimeout = 15000;
+const server = new GuardedGameServer({ transport: new SharedGameTransport(http) });
 registerTeamChat(http);
 server.define('battle', BattleRoom).filterBy(['mode', 'demo', 'squadId', 'ageBand']);
 server.define('conquest', BattleRoom, { mode: 'squad' }).filterBy(['demo', 'ageBand']);
