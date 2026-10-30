@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node --import tsx src/index.ts"
+    "dev": "node init && tsx watch src/index.ts",
+    "start": "node init && node --import tsx src/index.ts"
   }
 }
