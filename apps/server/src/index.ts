@@ -15,6 +15,8 @@ import { GuardedGameServer } from './matchmaking';
 import { SharedGameTransport } from './transport';
 import { currentSquad, registerTeamChat, notifyTeamMembershipChanged } from './chat';
 import { resultProof } from './result-proof';
+import { registerWeb3Routes, web3Inventory, processWeb3Jobs } from './web3';
+import { baseRewardsAdapter } from './chain-rewards';
 import { z } from 'zod';
 import type { Address, Hex } from 'viem';
 import {
@@ -151,6 +153,7 @@ app.get('/api/me', async (_q, r) => {
     badges: await badges(p.id),
     history: await history(p.id),
     wallet: await walletIdentity(p.id),
+    web3: await web3Inventory(p.id),
     campaign: await campaignProgress(p.id),
     squad: await currentSquad(p.id, p.demo),
     avatar: await readAvatar(p.id),
@@ -168,6 +171,27 @@ app.get('/api/results/:id/proof', async (q, r) => {
     return;
   }
   r.json(proof);
+});
+app.post('/api/results/:id/retry', async (q, r) => {
+  const proof = await resultProof(q.params.id, r.locals.player.id);
+  if (!proof) {
+    r.status(404).json({ error: 'Result not found' });
+    return;
+  }
+  if (
+    process.env.ALLOW_CHAIN_BROADCAST !== 'true' ||
+    proof.simulated ||
+    proof.status !== 'failed'
+  ) {
+    r.status(409).json({ error: 'Only failed live testnet submissions can be retried' });
+    return;
+  }
+  await db
+    .prepare(
+      "UPDATE outbox SET attempts=0,status='pending',error=NULL WHERE match_id=? AND status='failed'",
+    )
+    .run(q.params.id);
+  r.json({ status: 'pending' });
 });
 app.post('/api/wallet/nonce', async (q, r) => {
   try {
@@ -197,6 +221,7 @@ app.post('/api/wallet/bind', async (q, r) => {
 });
 registerHostedRoutes(app);
 registerCustomization(app);
+registerWeb3Routes(app);
 app.get('/api/campaign', async (_q, r) => {
   const p = r.locals.player;
   r.json({ progress: await campaignProgress(p.id), missions: MISSIONS, demoOrder: DEMO_MISSIONS });
@@ -381,8 +406,12 @@ server
   .filterBy(['demo', 'missionId', 'squadId', 'protocol', 'ageBand']);
 if (process.env.ALLOW_CHAIN_BROADCAST === 'true') {
   const adapter = new BaseAttestation();
+  const rewards = baseRewardsAdapter();
   setInterval(() => {
-    void processOutbox(adapter);
+    void (async () => {
+      await processOutbox(adapter);
+      await processWeb3Jobs(rewards);
+    })().catch((e: Error) => console.error('Web3 worker:', e.name));
   }, 15000).unref();
 }
 setInterval(() => {

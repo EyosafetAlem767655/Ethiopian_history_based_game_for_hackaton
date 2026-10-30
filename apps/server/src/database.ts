@@ -122,6 +122,8 @@ export async function checkDatabase() {
   await db.prepare('SELECT id FROM profiles LIMIT 1').all();
   await db.prepare('SELECT digest FROM revoked_sessions LIMIT 1').all();
   await db.prepare('SELECT id FROM team_messages LIMIT 1').all();
+  await db.prepare('SELECT id FROM web3_jobs LIMIT 1').all();
+  await db.prepare('SELECT player_id FROM web3_challenges LIMIT 1').all();
   await db.prepare('SELECT revision,upload_path FROM gathering_sessions LIMIT 1').all();
   await db.prepare('SELECT upload_path FROM age_reviews LIMIT 1').all();
   await db.prepare('SELECT path FROM media_deletions LIMIT 1').all();

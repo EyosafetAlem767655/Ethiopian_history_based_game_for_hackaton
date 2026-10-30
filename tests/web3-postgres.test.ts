@@ -56,6 +56,7 @@ it('runs wallet linking, identity snapshots and private chat through the Postgre
       '004_evidence_cleanup',
       '005_team_chat',
       '006_session_revocation',
+      '007_web3_jobs',
       '008_private_media',
     ]) {
       const sql = readFileSync('supabase/migrations/' + name + '.sql', 'utf8').replace(
@@ -68,6 +69,7 @@ it('runs wallet linking, identity snapshots and private chat through the Postgre
     const store = await import('../apps/server/src/store');
     const wallet = await import('../apps/server/src/wallet');
     const { resultProof } = await import('../apps/server/src/result-proof');
+    const rewards = await import('../apps/server/src/web3');
     const { registerTeamChat, currentSquad } = await import('../apps/server/src/chat');
     const player = await store.createProfile('Postgres Sam', true);
     const account = privateKeyToAccount(generatePrivateKey());
@@ -88,6 +90,12 @@ it('runs wallet linking, identity snapshots and private chat through the Postgre
     const proof = (await resultProof('pg-match', player.id))!;
     expect(verifyPayload(proof).status).toBe('match');
     expect(parseResult(proof.payload).participants[0].identity).toMatchObject({ kind: 'wallet' });
+    expect(await rewards.queueRegistration(player)).toMatchObject({ status: 'simulated' });
+    expect(await rewards.queueBadge(player, 'First Blood')).toMatchObject({
+      status: 'simulated',
+      tokenId: 1,
+    });
+    expect((await rewards.web3Inventory(player.id)).jobs).toHaveLength(2);
     const team = randomUUID();
     await store.db
       .prepare('INSERT INTO squads(id,code,name,demo,members) VALUES (?,?,?,?,?)')
