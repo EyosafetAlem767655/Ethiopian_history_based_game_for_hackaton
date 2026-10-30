@@ -115,6 +115,7 @@ export function campaignWorld(id: number, demo: boolean, seed = Date.now()): Wor
   w.time = demo ? 240 : m.minutes * 60 + 180;
   if (m.kind === 'conquest') w.time = demo ? 120 : 180;
   w.wind = m.biome === 'wind' ? { x: 0, y: demo ? 35 : 65 } : undefined;
+  w.monsterDamage = 0.6 + 0.4 * missionTier(id);
   const c: CampaignState = {
     version: 1,
     missionId: id,
@@ -176,17 +177,18 @@ export function campaignWorld(id: number, demo: boolean, seed = Date.now()): Wor
       [W - 180, 180],
       [W - 200, H - 180],
     ].map(([x, y], n) => marker('artifact' + n, x, y, 'Royal seal ' + (n + 1), 'seal'));
-  if (['rescue', 'courier'].includes(m.kind))
-    c.markers = (
-      m.kind === 'courier'
-        ? [[W - 220, H - 200]]
-        : [
-            [450, 170],
-            [W - 200, 190],
-            [W - 220, H - 180],
-          ]
-    ).map(([x, y], n) => marker('captive' + n, x, y, 'Hold E · traveler', 'captive'));
-  if (['escort', 'courier'].includes(m.kind))
+  if (m.kind === 'rescue')
+    c.markers = [
+      [450, 170],
+      [W - 200, 190],
+      [W - 220, H - 180],
+    ].map(([x, y], n) => marker('captive' + n, x, y, 'Hold E · traveler', 'captive'));
+  if (m.kind === 'outpost') {
+    const ford = marker('outpost', W - 230, H - 190, 'The ford · 100%', 'checkpoint');
+    ford.value = 100;
+    c.markers = [ford];
+  }
+  if (m.kind === 'escort')
     c.markers.push(
       ...[
         [500, 450],
@@ -227,8 +229,15 @@ export function equipCampaign(p: Fighter, w: World) {
   p.kind = 'warrior';
   return p;
 }
+/** 0 for the first mission … 1 for the last: drives the gradual difficulty ramp. */
+export function missionTier(id: number) {
+  return Math.max(0, Math.min(1, (id - 1) / 14));
+}
 function spawn(w: World, count: number, checkpoint?: { x: number; y: number }) {
-  const c = w.campaign!;
+  const c = w.campaign!,
+    tier = missionTier(c.missionId);
+  // Early missions send smaller groups; from mission 5 on, encounters keep their full size.
+  count = Math.max(1, Math.round(count * Math.min(1, 0.4 + 0.15 * (c.missionId - 1))));
   for (let n = 0; n < count; n++) {
     const index = c.spawned++,
       kind = (['hyena', 'caster', 'warden'] as const)[index % 3];
@@ -241,7 +250,10 @@ function spawn(w: World, count: number, checkpoint?: { x: number; y: number }) {
       kind === 'caster' ? 'archer' : kind === 'warden' ? 'spear' : 'rider',
     );
     f.kind = kind;
-    f.hp = w.demo ? (kind === 'warden' ? 70 : 40) : kind === 'warden' ? 155 : 85;
+    // Monsters toughen gradually: 60% health in the first mission, full health by the last.
+    f.hp = Math.round(
+      (w.demo ? (kind === 'warden' ? 70 : 40) : kind === 'warden' ? 155 : 85) * (0.6 + 0.4 * tier),
+    );
     f.maxHp = f.hp;
     const W = w.geometry!.width,
       H = w.geometry!.height;
@@ -301,15 +313,22 @@ function botCommand(p: Fighter, w: World): Input {
   const c = w.campaign!,
     m = MISSIONS[c.missionId - 1],
     leader = w.players.find((q) => !q.bot && q.team === 0),
+    // Monsters favor warriors over the civilian they guard, so it is not swarmed by everyone.
+    threat = (q: Fighter) => distance(p, q) + (q.kind === 'civilian' ? 160 : 0),
     enemies = w.players
       .filter((q) => q.hp > 0 && q.team !== p.team)
-      .sort((a, b) => distance(p, a) - distance(p, b));
+      .sort((a, b) => threat(a) - threat(b));
   let tx = enemies[0]?.x ?? w.bossX,
     ty = enemies[0]?.y ?? w.bossY;
   const target = enemies[0];
   let attack = !!target && distance(p, target) < (p.role === 'archer' ? 550 : 135),
     interact = false;
-  if (p.team === 0) {
+  if (p.kind === 'civilian') {
+    // Holds the standard in place and only swings at monsters that come close.
+    tx = p.x;
+    ty = p.y;
+    attack = !!target && distance(p, target) < 120;
+  } else if (p.team === 0) {
     const down = w.players.find((q) => q.team === 0 && q.hp <= 0 && q.kind !== 'civilian');
     if (down) {
       tx = down.x;
@@ -326,6 +345,10 @@ function botCommand(p: Fighter, w: World): Input {
     const zone = w.zones[(Number(p.id.replace(/\D/g, '')) || 0) % 3];
     tx = zone.x;
     ty = zone.y;
+  }
+  if (m.kind === 'outpost' && p.team === 1 && (!target || distance(p, target) > 220)) {
+    tx = c.markers[0].x;
+    ty = c.markers[0].y;
   }
   if (m.kind === 'joust') {
     tx = p.team === 0 ? 1000 : 200;
@@ -360,14 +383,14 @@ function botCommand(p: Fighter, w: World): Input {
       attack &&
       w.tick %
         (p.team === 1
-          ? p.kind === 'caster'
-            ? 48
-            : p.kind === 'warden'
-              ? 45
-              : w.demo
-                ? 30
-                : 24
-          : 5) ===
+          ? // Early-mission monsters strike up to 60% less often; the last mission is full speed.
+            Math.round(
+              (p.kind === 'caster' ? 48 : p.kind === 'warden' ? 45 : w.demo ? 30 : 24) *
+                (1 + 0.6 * (1 - missionTier(c.missionId))),
+            )
+          : p.kind === 'civilian'
+            ? 54 // The standard-bearer fights back, but swings rarely.
+            : 5) ===
         0,
     block: !!target && target.attack > 0.1 && w.tick % 8 === 0,
     dodge: w.telegraph === 'shockwave' && w.tick % 25 === 0,
@@ -386,14 +409,31 @@ export function stepCampaign(w: World, humanInputs: Map<string, Input>, dt = DT)
         'oath',
         'rescue',
         'capture',
-        'courier',
+        'outpost',
         'escort',
         'guardian',
         'artifacts',
         'beacons',
       ].includes(m.kind)
     )
-      spawn(w, w.demo ? 2 : 4, m.kind === 'oath' ? { x: 850, y: 380 } : undefined);
+      // The oath opens with a single monster; others arrive one at a time (see the oath step).
+      spawn(
+        w,
+        m.kind === 'oath' || m.kind === 'outpost' ? 1 : w.demo ? 2 : 4,
+        m.kind === 'oath'
+          ? { x: 1000, y: 380 }
+          : m.kind === 'outpost'
+            ? { x: 230, y: 200 }
+            : undefined,
+      );
+    if (m.kind === 'outpost') {
+      // The defenders start at the ford; the waves march in from the far corner.
+      const ford = c.markers[0];
+      for (const [n, p] of w.players.filter((p) => p.team === 0).entries()) {
+        p.x = ford.x - 70 - n * 30;
+        p.y = ford.y - 20 + n * 25;
+      }
+    }
     if (m.kind === 'conquest') {
       while (w.players.filter((p) => p.team === 1).length < 4) {
         const n = w.players.length,
@@ -443,13 +483,18 @@ export function stepCampaign(w: World, humanInputs: Map<string, Input>, dt = DT)
       npc.kind = 'civilian';
       npc.x = 600;
       npc.y = 380;
-      npc.hp = 220;
-      npc.maxHp = 220;
+      npc.hp = 300;
+      npc.maxHp = 300;
       w.players.push(npc);
     }
   }
   for (const p of w.players) {
-    if (p.bot) inputs.set(p.id, p.kind === 'civilian' ? emptyInput(w.tick) : botCommand(p, w));
+    // The oath's standard-bearer defends itself; other civilians are escorted and stay passive.
+    if (p.bot)
+      inputs.set(
+        p.id,
+        p.kind === 'civilian' && m.kind !== 'oath' ? emptyInput(w.tick) : botCommand(p, w),
+      );
     if (m.kind === 'joust' && (c.throws[p.id] ?? -1) === c.round) {
       const i = inputs.get(p.id);
       if (i) inputs.set(p.id, { ...i, attack: false });
@@ -505,6 +550,19 @@ export function stepCampaign(w: World, humanInputs: Map<string, Input>, dt = DT)
     }
   }
   const humans = w.players.filter((p) => !p.bot && p.team === 0);
+  // Catch your breath between fights: warriors recover when no monster is near. Generous in
+  // early missions (~8 hp/s), tapering to 2 hp/s by the last, never during the boss.
+  if (!c.boss && m.kind !== 'joust') {
+    const recovery = (2 + 6 * (1 - missionTier(c.missionId))) * dt;
+    for (const p of w.players)
+      if (
+        p.team === 0 &&
+        p.hp > 0 &&
+        p.hp < (p.maxHp ?? 100) &&
+        !w.players.some((q) => q.team === 1 && q.hp > 0 && distance(p, q) < 320)
+      )
+        p.hp = Math.min(p.maxHp ?? 100, p.hp + recovery);
+  }
   for (const p of humans) {
     const i = inputs.get(p.id);
     if (!i?.interact || p.hp <= 0) {
@@ -531,9 +589,7 @@ export function stepCampaign(w: World, humanInputs: Map<string, Input>, dt = DT)
         event(w, 'rescue', near.x, near.y, p.id, 20, 'Traveler rescued');
         guide(
           w,
-          m.kind === 'courier'
-            ? 'The courier is safe. Stay near them through the checkpoints.'
-            : `${c.markers.filter((a) => a.kind === 'captive' && a.done).length} travelers rescued. Search the next guarded path.`,
+          `${c.markers.filter((a) => a.kind === 'captive' && a.done).length} travelers rescued. Search the next guarded path.`,
         );
       }
     }
@@ -626,11 +682,16 @@ export function stepCampaign(w: World, humanInputs: Map<string, Input>, dt = DT)
       for (const p of humans.filter((p) => p.damage > 0))
         honor(w, p, 'protect-trainee-' + p.id, 40);
       finish(w);
-    } else if (w.tick / 30 >= c.wave * (w.demo ? 12 : 15) && w.tick / 30 < duration) {
-      spawn(w, w.demo ? 2 : 4, { x: c.wave % 2 ? 250 : 950, y: c.wave % 3 === 0 ? 200 : 500 });
+    } else if (
+      // One monster at a time on a timer, never more than two on the field at once.
+      w.tick / 30 >= c.wave * (w.demo ? 12 : 20) &&
+      w.tick / 30 < duration &&
+      aliveEnemies().length < 2
+    ) {
+      spawn(w, 1, { x: c.wave % 2 ? 220 : 1000, y: c.wave % 3 === 0 ? 200 : 500 });
       guide(
         w,
-        `Reinforcement ${c.wave}. Keep the standard-bearer alive through the ${duration}-second oath.`,
+        `A new monster approaches (${c.wave}). Keep the standard-bearer alive through the ${duration}-second oath.`,
       );
     }
   }
@@ -720,8 +781,38 @@ export function stepCampaign(w: World, humanInputs: Map<string, Input>, dt = DT)
   )
     finish(w);
   if (m.kind === 'artifacts' && c.markers.every((a) => a.done) && !aliveEnemies().length) finish(w);
-  if (['escort', 'courier'].includes(m.kind)) {
-    const released = m.kind === 'escort' || c.markers.some((a) => a.kind === 'captive' && a.done);
+  if (m.kind === 'outpost') {
+    // Hold the ford: monsters standing on it drain its strength; clear every wave to win.
+    const ford = c.markers[0],
+      waves = 3,
+      raiders = aliveEnemies().filter((p) => distance(p, ford) < 95).length;
+    if (raiders) ford.value = Math.max(0, (ford.value ?? 100) - raiders * (w.demo ? 3 : 5) * dt);
+    ford.label = `The ford · ${Math.ceil(ford.value ?? 0)}%`;
+    if ((ford.value ?? 0) <= 0) {
+      guide(w, 'The monsters overran the ford. Rally and hold it again.');
+      finish(w, false);
+      return;
+    }
+    if (!aliveEnemies().length) {
+      if (c.wave >= waves) {
+        honor(w, humans[0], 'outpost-held');
+        finish(w);
+      } else {
+        // A short breather, then the next, larger wave.
+        c.roundTick += dt;
+        if (c.roundTick >= 3) {
+          c.roundTick = 0;
+          spawn(w, 2, { x: 230, y: c.wave % 2 ? 520 : 200 });
+          guide(
+            w,
+            `Wave ${c.wave} of ${waves} is coming for the ford. Meet them before they reach it.`,
+          );
+        }
+      }
+    }
+  }
+  if (m.kind === 'escort') {
+    const released = true;
     if (released) {
       let bearer = w.players.find((p) => p.id === 'bearer');
       if (!bearer) {

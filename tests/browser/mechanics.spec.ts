@@ -9,7 +9,8 @@ const goals: Record<number, (w: World) => boolean> = {
   2: (w) => w.campaign!.markers.some((a) => a.done),
   3: (w) => w.campaign!.clues > 0,
   4: (w) => w.players.some((p) => !p.bot && p.damage > 0),
-  5: (w) => w.players.some((p) => !p.bot && (p.mount?.speed ?? 0) > 150),
+  5: (w) =>
+    w.players.some((p) => !p.bot && p.damage > 0) && (w.campaign!.markers[0].value ?? 0) > 0,
   6: (w) => w.zones.some((z) => z.owner === 0),
   7: (w) => w.campaign!.escort > 0,
   8: (w) => w.campaign!.markers.some((a) => a.kind === 'captive' && a.done),

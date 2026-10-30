@@ -140,3 +140,44 @@
     width: 90%;
   }
 }
+.armor-picker {
+  margin-top: 26px;
+}
+.armor-picker h3 {
+  font-size: 14px;
+  color: #e6cc8e;
+  margin-bottom: 10px;
+}
+.armor-picker > div {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.personal-panel .armor-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 14px 16px;
+  text-align: left;
+  border: 1px solid #35504b;
+  border-radius: 10px;
+  background: #13252b;
+}
+.personal-panel .armor-option.armor-royal-feast:not(:disabled) {
+  border-color: #c9a95f;
+  background: linear-gradient(120deg, #2d2814, #13252b);
+}
+.personal-panel .armor-option.equipped {
+  box-shadow: 0 0 0 2px #e8c25b;
+}
+.armor-option small {
+  color: #a6b3ad;
+  font-size: 11px;
+}
+.armor-option em {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: #f0d793;
+}

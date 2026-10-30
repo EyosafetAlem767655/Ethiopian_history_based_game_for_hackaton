@@ -33,6 +33,12 @@ export const defaultAvatar: AvatarSpec = {
 };
 export const ageBands = ['18–24', '25–34', '35–44', '45+'] as const;
 export type AgeBand = (typeof ageBands)[number];
+/** Unreviewed players share one 'guest' pool; reviewed adults stay in their own age band. */
+export const GUEST_POOL = 'guest';
+export type MatchPool = AgeBand | typeof GUEST_POOL;
+export function isMatchPool(pool: unknown): pool is MatchPool {
+  return pool === GUEST_POOL || ageBands.includes(pool as AgeBand);
+}
 export type ReviewStatus =
   | 'unsubmitted'
   | 'pending'
@@ -108,6 +114,28 @@ export function joint(
   return {
     x: hip.x + Math.cos(base + offset * bend) * upper,
     y: hip.y + Math.sin(base + offset * bend) * upper,
+  };
+}
+/**
+ * Walk-to-run foot path. `run` (0 walk … 1 sprint) shortens ground contact so both feet leave the
+ * ground (a flight phase), lengthens the stride and raises the knee. `roll` tilts the boot
+ * heel-to-toe through stance and toe-up during the swing.
+ */
+export function runFoot(phase: number, run = 0, scale = 1) {
+  const u = (((phase / (2 * Math.PI)) % 1) + 1) % 1,
+    stance = 0.6 - 0.25 * run,
+    reach = (16 + 6 * run) * scale,
+    lift = (14 + 12 * run) * scale;
+  if (u < stance) {
+    const t = u / stance;
+    return { x: reach - 2 * reach * t, y: 0, roll: -0.25 * t };
+  }
+  const t = (u - stance) / (1 - stance),
+    eased = t * t * (3 - 2 * t);
+  return {
+    x: -reach + 2 * reach * eased,
+    y: -Math.sin(Math.PI * t) * lift,
+    roll: 0.35 * Math.sin(Math.PI * t) - 0.1,
   };
 }
 export function gaitFoot(phase: number, lift = 16) {

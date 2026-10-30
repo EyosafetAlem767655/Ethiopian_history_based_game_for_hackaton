@@ -8,6 +8,59 @@ import {
   rankFor,
 } from '../../../packages/shared/src/missions';
 import { useUI } from './store';
+import { CHANOLY_LOGO } from './Perk';
+const PERK_KEY = 'kibre-lunch-perk-dismissed';
+/** Lunch gathering perk shown on the levels screen. Declining just hides it; play continues. */
+function LunchPerk({ onJoin }: { onJoin: () => void }) {
+  const [hidden, setHidden] = React.useState(() => {
+    try {
+      return localStorage.getItem(PERK_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  if (hidden) return null;
+  return (
+    <aside className="lunch-perk" role="complementary" aria-label="Royal Lunch Perk">
+      <div className="lunch-perk-badge" aria-hidden>
+        <b>40%</b>
+        <small>LUNCH</small>
+      </div>
+      <div>
+        <img src={CHANOLY_LOGO} alt="Chanoly Noodle" className="chanoly-logo" />
+        <span className="eyebrow">ROYAL LUNCH PERK · CHANOLY NOODLES</span>
+        <h2>Feast with your squad, fight in gold.</h2>
+        <p>
+          Meet your three squadmates for lunch and submit a group selfie while you eat.{' '}
+          <b>40% of the lunch is covered</b> (Chanoly noodles for now) and every member unlocks the
+          free <b>Royal Feast armor</b>.
+        </p>
+        <small className="lunch-perk-terms">
+          Prototype offer, terms apply. Verified accounts only. The selfie stays private to your
+          squad and needs everyone’s consent.
+        </small>
+      </div>
+      <div className="lunch-perk-actions">
+        <button className="gold-btn" onClick={onJoin}>
+          JOIN THE FEAST <span>→</span>
+        </button>
+        <button
+          className="outline-btn"
+          onClick={() => {
+            setHidden(true);
+            try {
+              localStorage.setItem(PERK_KEY, '1');
+            } catch {
+              /* Hidden for this visit only. */
+            }
+          }}
+        >
+          NOT NOW
+        </button>
+      </div>
+    </aside>
+  );
+}
 export function CampaignScreen({
   onMission,
   onTraining,
@@ -66,6 +119,7 @@ export function CampaignScreen({
           </button>
         </div>
       </div>
+      {!p.fellowship && <LunchPerk onJoin={onSquad} />}
       {needsGathering && (
         <div className="gathering-callout">
           <span>♧</span>
@@ -122,7 +176,7 @@ export function CampaignScreen({
                           ? '✧'
                           : ['guardian', 'throne'].includes(m.kind)
                             ? '♛'
-                            : m.kind === 'rescue' || m.kind === 'courier'
+                            : m.kind === 'rescue' || m.kind === 'outpost'
                               ? '♧'
                               : '⚑'}
                     </span>

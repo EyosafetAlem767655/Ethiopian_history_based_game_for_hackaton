@@ -6,7 +6,7 @@ export class PrototypeLunchProvider implements LunchRewardProvider {
     return {
       redeemable: false,
       disclaimer:
-        'Prototype Royal Lunch Pass — demonstration only. Not redeemable at Burger King. No commercial partnership.',
+        'Prototype Royal Lunch Perk: 40% of a squad lunch (Chanoly noodles for now). Prototype offer, terms apply.',
     };
   }
 }

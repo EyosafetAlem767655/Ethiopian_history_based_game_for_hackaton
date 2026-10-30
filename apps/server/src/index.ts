@@ -14,6 +14,9 @@ import { fileURLToPath } from 'node:url';
 import { Server } from '@colyseus/core';
 import { SharedGameTransport } from './transport';
 import { currentSquad, registerTeamChat } from './chat';
+import { registerNotifySocket, registerSocialRoutes, friendCode } from './social';
+import { liveMatches, registerSpectators } from './live';
+import { registerTournamentRoutes } from './tournament';
 import { resultProof } from './result-proof';
 import { z } from 'zod';
 import type { Address, Hex } from 'viem';
@@ -45,6 +48,7 @@ import {
   issueBadge,
   campaignProgress,
   saveCampaign,
+  armorSets,
 } from './store';
 const app = express();
 // Render terminates TLS at one proxy hop; trust it so req.ip is the client, not the proxy.
@@ -151,6 +155,7 @@ app.get('/api/me', async (_q, r) => {
     squad: await currentSquad(p.id, p.demo),
     avatar: await readAvatar(p.id),
     age: await eligibility(p.id),
+    friendCode: friendCode(p.id),
   });
 });
 app.get('/api/results/:id/proof', async (q, r) => {
@@ -189,6 +194,22 @@ app.post('/api/wallet/bind', async (q, r) => {
 });
 registerHostedRoutes(app);
 registerCustomization(app);
+registerSocialRoutes(app);
+registerTournamentRoutes(app);
+app.get('/api/live', (_q, r) => {
+  r.json(liveMatches(!!r.locals.player.demo));
+});
+app.put('/api/armor', async (q, r) => {
+  const { armor } = z.object({ armor: z.enum(armorSets) }).parse(q.body);
+  const p = (await profile(r.locals.player.id))!;
+  if (armor !== 'standard' && !p.progress.armor?.includes(armor)) {
+    r.status(403).json({ error: 'Complete the Royal Gathering to unlock this armor.' });
+    return;
+  }
+  p.progress.equipped = armor;
+  await saveProfile(p);
+  r.json({ progress: p.progress });
+});
 app.get('/api/campaign', async (_q, r) => {
   const p = r.locals.player;
   r.json({ progress: await campaignProgress(p.id), missions: MISSIONS, demoOrder: DEMO_MISSIONS });
@@ -359,8 +380,12 @@ app.use((err: Error, _q: express.Request, r: express.Response, _n: express.NextF
 });
 const http = createServer(app);
 const server = new Server({ transport: new SharedGameTransport(http) });
-registerTeamChat(http);
-server.define('battle', BattleRoom).filterBy(['mode', 'demo', 'squadId', 'ageBand']);
+const io = registerTeamChat(http);
+registerNotifySocket(io);
+registerSpectators(io);
+server
+  .define('battle', BattleRoom)
+  .filterBy(['mode', 'demo', 'squadId', 'ageBand', 'tournamentId', 'matchKey']);
 server.define('conquest', BattleRoom, { mode: 'squad' }).filterBy(['demo', 'ageBand']);
 server.define('quest', BattleRoom, { mode: 'quest' }).filterBy(['demo', 'squadId', 'ageBand']);
 server.define('squad-lobby', SquadLobby).filterBy(['squadId', 'ageBand']);

@@ -32,6 +32,9 @@ services:
         sync: false
       - key: VITE_SUPABASE_PUBLISHABLE_KEY
         sync: false
+      # Your public site origin, e.g. https://kibre-gugs-server.onrender.com (wallet sign-in messages).
+      - key: WALLET_ORIGIN
+        sync: false
       # Leave unset until the age-cleanup schedule is verified (see docs/DEPLOYMENT.md).
       - key: AGE_REVIEWER_IDS
         sync: false

@@ -10,9 +10,18 @@ import { requestJSON } from './services/http';
 import { CampaignScreen } from './CampaignScreen';
 import { MatchRecord } from './MatchRecord';
 import { TeamChat } from './TeamChat';
+import { ProfileMenu } from './ProfileMenu';
+import { VerifyPrompt, LunchSelfie, CHANOLY_LOGO } from './Perk';
+import {
+  NotificationCenter,
+  FriendsPage,
+  TournamentPage,
+  LiveMatches,
+  SpectatorView,
+} from './Social';
 import { ScrollGuide } from './ScrollGuide';
 import { audio } from './audio';
-import { MISSIONS } from '../../../packages/shared/src/missions';
+import { MISSIONS, DEMO_MISSIONS, missionEligibility } from '../../../packages/shared/src/missions';
 import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
 import type { Mode, World } from '../../../packages/shared/src/game';
 import './style.css';
@@ -78,7 +87,17 @@ function App() {
     [board, setBoard] = useState(false),
     [leaders, setLeaders] = useState<any[]>([]),
     [messages, setMessages] = useState<any[]>([]),
-    [chat, setChat] = useState('');
+    [chat, setChat] = useState(''),
+    [tournamentId, setTournamentId] = useState<string | undefined>(),
+    [watching, setWatching] = useState<{ id: string; label: string } | null>(null),
+    [verifyAsk, setVerifyAsk] = useState<'' | 'squad' | 'duel'>('');
+  // Each verification prompt appears at most once per visit.
+  const askedVerify = useRef(new Set<string>());
+  function askVerify(reason: 'squad' | 'duel') {
+    if (useUI.getState().me?.age?.band || askedVerify.current.has(reason)) return;
+    askedVerify.current.add(reason);
+    setVerifyAsk(reason);
+  }
   const gameEl = useRef<HTMLDivElement>(null);
   const progress = me?.profile?.progress ?? session?.profile.progress;
   useEffect(() => {
@@ -167,7 +186,7 @@ function App() {
       setPage('heroes');
     });
   }
-  async function start(mode: Mode) {
+  async function start(mode: Mode, extra: { tournamentId?: string; matchKey?: string } = {}) {
     audio.unlock();
     await action(async () => {
       if (!session) return;
@@ -183,11 +202,12 @@ function App() {
       const r = await match(mode === 'squad' ? 'conquest' : mode === 'quest' ? 'quest' : 'battle', {
         mode,
         protocol: PROTOCOL_VERSION,
-        ageBand: useUI.getState().me?.age?.band ?? 'solo',
+        ageBand: useUI.getState().me?.age?.band ?? 'guest',
         demo: !!session.profile.demo,
         squadId: mode === 'squad' || mode === 'quest' ? (squad?.id ?? '') : '',
         token: session.token,
         hero,
+        ...extra,
       });
       wireRoom(r, c);
       setRoom(r);
@@ -214,7 +234,7 @@ function App() {
       const options = {
         missionId,
         protocol: PROTOCOL_VERSION,
-        ageBand: useUI.getState().me?.age?.band ?? 'solo',
+        ageBand: useUI.getState().me?.age?.band ?? 'guest',
         demo: !!session.profile.demo,
         token: session.token,
         hero,
@@ -270,18 +290,30 @@ function App() {
       });
     });
   }
+  /** The mission after the one just won, in campaign order (story demo or full journey). */
+  function nextStage(w: World) {
+    if (!w.campaign) return undefined;
+    const order = w.demo ? DEMO_MISSIONS : MISSIONS.map((m) => m.id);
+    const next = order[order.indexOf(w.campaign.missionId) + 1],
+      progress = useUI.getState().me?.campaign;
+    // Hide the shortcut when the next mission is still locked (e.g. it needs the gathering).
+    return next && progress && !missionEligibility(progress, next, w.demo) ? next : undefined;
+  }
   async function exit() {
+    const finishedDuel = useUI.getState().snapshot?.mode === 'duel';
     await room?.leave();
     setRoom(null);
     useUI.setState({ snapshot: null, resultSaved: false });
     await refresh();
     setPage('journey');
+    if (finishedDuel) askVerify('duel');
   }
   async function getSquad(code?: string) {
     await action(async () => {
       const s = await api('/squad', code ? { code } : {});
       setSquad(s);
       setPage('squad');
+      askVerify('squad');
       const url = location.origin + '/?pass=' + encodeURIComponent(s.id);
       setQr(
         await QRCode.toDataURL(url, { color: { dark: '#101e23', light: '#f2dfad' }, width: 160 }),
@@ -302,7 +334,9 @@ function App() {
     ['leaderboard', '♛', 'Hall of legends'],
     ['profile', '◈', 'Your legacy'],
     ['personalize', '◉', 'Your likeness'],
-    ['age', '◇', 'Adult matchmaking'],
+    ['age', '◇', 'Verify identity'],
+    ['friends', '☺', 'Friends'],
+    ['tournament', '♛', 'Tournament'],
   ];
   function navigate(id: string) {
     if (id === 'squad') {
@@ -310,7 +344,7 @@ function App() {
       else setPage('identity');
       return;
     }
-    if (['personalize', 'age', 'review'].includes(id) && !session) {
+    if (['personalize', 'age', 'review', 'friends', 'tournament'].includes(id) && !session) {
       setPage('identity');
       return;
     }
@@ -381,6 +415,19 @@ function App() {
                 <i /> PROFILE{' '}
                 <em>{me?.wallet?.status === 'verified' ? 'WALLET LINKED' : 'WALLET NOT LINKED'}</em>
               </span>
+              <NotificationCenter
+                inBattle={page === 'battle' || !!watching}
+                onOpen={(n) => {
+                  if (n.kind === 'squad-invite' && n.data.code) void getSquad(String(n.data.code));
+                  else if (n.kind === 'tournament') {
+                    setTournamentId(String(n.data.tournamentId ?? ''));
+                    setPage('tournament');
+                  } else if (n.kind.startsWith('friend')) setPage('friends');
+                  else if (n.kind === 'armor') setPage('personalize');
+                  else if (n.kind === 'age-review' || n.kind === 'armor-pending') setPage('age');
+                  else setPage('profile');
+                }}
+              />
               <button
                 className="sound"
                 aria-label="Toggle sound"
@@ -392,7 +439,7 @@ function App() {
                 {muted ? '♪̸' : '♪'}
               </button>
               {session ? (
-                <button className="user-chip" onClick={() => setPage('profile')}>
+                <ProfileMenu verified={!!me?.age?.band} onNavigate={navigate}>
                   <Portrait hero={hero} />
                   <span>
                     {session.profile.name}
@@ -404,7 +451,7 @@ function App() {
                           : 'GUEST WARRIOR'}
                     </small>
                   </span>
-                </button>
+                </ProfileMenu>
               ) : (
                 <span className="guest">A legend awaits</span>
               )}
@@ -421,6 +468,32 @@ function App() {
         {page === 'personalize' && session && <AvatarEditor />}
         {page === 'age' && session && <AgePanel onSignIn={() => setPage('identity')} />}
         {page === 'review' && session && <ReviewPanel />}
+        {page === 'friends' && session && (
+          <FriendsPage onJoinTeam={(code) => void getSquad(code || undefined)} />
+        )}
+        {page === 'tournament' && session && (
+          <TournamentPage
+            initialId={tournamentId}
+            onPlay={(id, matchKey) => void start('duel', { tournamentId: id, matchKey })}
+          />
+        )}
+        {verifyAsk && session && (
+          <VerifyPrompt
+            reason={verifyAsk}
+            onClose={() => setVerifyAsk('')}
+            onVerify={() => {
+              setVerifyAsk('');
+              setPage('age');
+            }}
+          />
+        )}
+        {watching && session && (
+          <SpectatorView
+            roomId={watching.id}
+            label={watching.label}
+            onLeave={() => setWatching(null)}
+          />
+        )}
         {error && (
           <div className="error" role="alert">
             {error}
@@ -653,7 +726,7 @@ function App() {
                     <p className="subtle">
                       {me?.age?.band
                         ? `Human matchmaking · reviewed adults ${me.age.band}`
-                        : 'Solo and AI play · Fayda review enables human matchmaking.'}
+                        : 'Guest matchmaking · play other guests live; AI fills empty seats. Verify your identity for adult pools.'}
                     </p>
                   </div>
                   <span className="demo-tag">
@@ -738,6 +811,7 @@ function App() {
                     </button>
                   </article>
                 </div>
+                <LiveMatches onWatch={(id, label) => setWatching({ id, label })} />
               </>
             )}
           </section>
@@ -811,17 +885,27 @@ function App() {
             )}
             <div className="lunch-pass">
               <div>
-                <span className="eyebrow">THE ROYAL GATHERING</span>
+                <img src={CHANOLY_LOGO} alt="Chanoly Noodle" className="chanoly-logo small" />
+                <span className="eyebrow">THE ROYAL GATHERING · LUNCH PERK</span>
                 <h2>A seat at the royal table.</h2>
                 <p>
-                  Complete Chapter II to unlock your pass. Legacy arena qualification also remains
-                  valid: {isDemo ? 'one squad victory' : 'two squad victories with 1100 rating'}.
+                  Meet your four-warrior squad for lunch and submit a group selfie while you eat:
+                  40% of the lunch is covered (Chanoly noodles for now) and everyone unlocks the
+                  Royal Feast armor. Complete Chapter II to unlock your pass. Legacy arena
+                  qualification also remains valid:{' '}
+                  {isDemo ? 'one squad victory' : 'two squad victories with 1100 rating'}.
                 </p>
                 <small>
-                  Prototype Royal Lunch Pass — demonstration only.
-                  <br />
-                  Not redeemable at Burger King. No commercial partnership.
+                  Prototype offer, terms apply. Perks are given to verified accounts only.
                 </small>
+                <LunchSelfie
+                  verified={!!me?.age?.band}
+                  demo={isDemo}
+                  onVerify={() => setPage('age')}
+                  onDemo={() => setPage('gathering')}
+                >
+                  <GatheringPanel squad={squad} onVerified={refresh} />
+                </LunchSelfie>
               </div>
               <div className="pass-ticket">
                 <span>ROYAL LUNCH PASS</span>
@@ -1289,9 +1373,39 @@ function App() {
                         ? '◈ SERVER RESULT SAVED · VERIFY IN YOUR LEGACY'
                         : 'SAVING RESULT… PLEASE STAY CONNECTED'}
                     </span>
-                    <button className="gold-btn" disabled={!resultSaved} onClick={exit}>
-                      CONTINUE THE JOURNEY →
-                    </button>
+                    {snapshot.mode === 'duel' && !me?.age?.band && (
+                      <p className="verify-hint">
+                        ◇ Verify your identity next to unlock adult matchmaking and perks.
+                      </p>
+                    )}
+                    <div className="result-actions">
+                      {snapshot.winner === mine?.team
+                        ? nextStage(snapshot) && (
+                            <button
+                              className="gold-btn"
+                              disabled={!resultSaved || busy}
+                              onClick={() => void startCampaign(nextStage(snapshot)!)}
+                            >
+                              NEXT STAGE →
+                            </button>
+                          )
+                        : snapshot.mode !== 'tutorial' && (
+                            <button
+                              className="gold-btn"
+                              disabled={!resultSaved || busy}
+                              onClick={() =>
+                                void (snapshot.campaign
+                                  ? startCampaign(snapshot.campaign.missionId)
+                                  : start(snapshot.mode))
+                              }
+                            >
+                              ↻ RESTART
+                            </button>
+                          )}
+                      <button className="outline-btn" disabled={!resultSaved} onClick={exit}>
+                        CONTINUE THE JOURNEY →
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -1426,7 +1540,7 @@ function SquadReadiness({ squad, onStart }: { squad: any; onStart: () => Promise
     void new Client(endpoint)
       .joinOrCreate('squad-lobby', {
         squadId: squad.id,
-        ageBand: useUI.getState().me?.age?.band ?? 'solo',
+        ageBand: useUI.getState().me?.age?.band ?? 'guest',
         token: session!.token,
       })
       .then((r) => {
@@ -1509,9 +1623,44 @@ function GatheringPanel({ squad, onVerified }: { squad: any; onVerified: () => P
     [consent, setConsent] = useState(false),
     [file, setFile] = useState<File | null>(null),
     [preview, setPreview] = useState(''),
-    [loading, setLoading] = useState(false);
+    [loading, setLoading] = useState(false),
+    [camera, setCamera] = useState<MediaStream | null>(null);
+  const video = useRef<HTMLVideoElement>(null);
   const { me, session } = useUI();
   const leader = squad?.members[0]?.id === session?.profile.id;
+  useEffect(() => {
+    if (video.current && camera) {
+      video.current.srcObject = camera;
+      void video.current.play();
+    }
+    return () => camera?.getTracks().forEach((t) => t.stop());
+  }, [camera]);
+  async function openCamera() {
+    try {
+      setCamera(
+        await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 1280 } },
+          audio: false,
+        }),
+      );
+    } catch {
+      useUI.setState({ error: 'Camera unavailable. Choose a photo instead.' });
+    }
+  }
+  async function snap() {
+    const v = video.current;
+    if (!v?.videoWidth) return;
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    c.getContext('2d')!.drawImage(v, 0, 0);
+    const blob = await new Promise<Blob | null>((ok) => c.toBlob(ok, 'image/jpeg', 0.9));
+    camera?.getTracks().forEach((t) => t.stop());
+    setCamera(null);
+    if (!blob) return;
+    setFile(new File([blob], 'lunch-selfie.jpg', { type: 'image/jpeg' }));
+    setPreview(URL.createObjectURL(blob));
+  }
   async function refresh() {
     const current = await api('/gathering-squad/' + squad.id);
     if (current.id) {
@@ -1583,8 +1732,33 @@ function GatheringPanel({ squad, onVerified }: { squad: any; onVerified: () => P
           )}
           {!record.verified && (
             <>
+              <div className="panel-actions">
+                {camera ? (
+                  <>
+                    <button className="gold-btn" onClick={() => void snap()}>
+                      TAKE THE SELFIE
+                    </button>
+                    <button className="outline-btn" onClick={() => setCamera(null)}>
+                      CANCEL
+                    </button>
+                  </>
+                ) : (
+                  <button className="outline-btn" onClick={() => void openCamera()}>
+                    📷 TAKE A SELFIE WITH CAMERA
+                  </button>
+                )}
+              </div>
+              {camera && (
+                <video
+                  ref={video}
+                  muted
+                  playsInline
+                  className="group-photo"
+                  aria-label="Camera preview for the lunch selfie"
+                />
+              )}
               <label className="upload-label">
-                CHOOSE A SQUAD PHOTO
+                OR CHOOSE A SQUAD PHOTO
                 <input
                   type="file"
                   accept="image/png,image/jpeg,image/webp"

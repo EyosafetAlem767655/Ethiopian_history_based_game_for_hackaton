@@ -49,7 +49,8 @@ async function startServer() {
   child.stdout?.on('data', (s) => {
     log += s;
   });
-  for (let n = 0; n < 100; n++) {
+  // A cold tsx start can take ~10 s on a busy machine.
+  for (let n = 0; n < 300; n++) {
     if (child.exitCode !== null) throw Error(log);
     try {
       if ((await fetch(base + '/api/health')).ok) return;
@@ -140,7 +141,7 @@ function send(
 beforeAll(async () => {
   mkdirSync('output/tests', { recursive: true });
   await startServer();
-});
+}, 40000);
 afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.disconnect();
   await Promise.allSettled(rooms.splice(0).map((room) => room.leave()));

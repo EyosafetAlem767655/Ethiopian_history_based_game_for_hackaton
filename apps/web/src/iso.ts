@@ -1,4 +1,9 @@
-import { joint, gaitFoot, defaultAvatar } from '../../../packages/shared/src/customization';
+import {
+  joint,
+  gaitFoot,
+  runFoot,
+  defaultAvatar,
+} from '../../../packages/shared/src/customization';
 import { avatarCanvas } from './avatar';
 import Phaser from 'phaser';
 import type { Room } from 'colyseus.js';
@@ -23,6 +28,11 @@ import { useUI } from './store';
 import { audio } from './audio';
 type Rig = {
   deadAt?: number;
+  lastTime?: number;
+  attackId: number;
+  swingStart: number;
+  blockUntil: number;
+  springs: Record<string, { x: number; v: number }>;
   phase: number;
   lastX: number;
   lastY: number;
@@ -32,6 +42,72 @@ type Rig = {
   label: Phaser.GameObjects.Text;
   health: Phaser.GameObjects.Graphics;
 };
+const SWING_MS = 340;
+const NON_TEXT_INPUTS = new Set([
+  'checkbox',
+  'radio',
+  'range',
+  'button',
+  'submit',
+  'reset',
+  'color',
+  'file',
+]);
+const ROYAL_FEAST_GOLD = [
+  'torso',
+  'upperArm',
+  'forearm',
+  'backUpperArm',
+  'backForearm',
+  'frontThigh',
+  'backThigh',
+  'frontShin',
+  'backShin',
+  'frontBoot',
+  'backBoot',
+];
+const mix = (a: number, b: number, t: number) => a + (b - a) * t;
+const smooth = (t: number) => t * t * (3 - 2 * t);
+const snap = (t: number) => 1 - (1 - t) ** 3;
+type Pose = { u: number; b: number; grip: number; lean: number };
+/** Interpolate [time, pose, easing] keyframes. Angles are unwrapped so the arc keeps its direction. */
+function keyframes(t: number, frames: [number, Pose, (t: number) => number][]) {
+  for (let n = 1; n < frames.length; n++) {
+    const [t1, b, ease] = frames[n];
+    if (t <= t1) {
+      const [t0, a] = frames[n - 1],
+        k = ease((t - t0) / (t1 - t0));
+      return {
+        u: mix(a.u, b.u, k),
+        b: mix(a.b, b.b, k),
+        grip: mix(a.grip, b.grip, k),
+        lean: mix(a.lean, b.lean, k),
+      };
+    }
+  }
+  return frames[frames.length - 1][1];
+}
+const TAU = Math.PI * 2;
+/** Sword: wind up over the shoulder, snap through an overhead-to-forward arc, follow through. */
+function slashPose(t: number) {
+  return keyframes(t, [
+    [0, { u: 0.15, b: -0.35, grip: -0.05, lean: 0 }, smooth],
+    [0.28, { u: 2.6, b: -1.0, grip: 2.8, lean: -0.08 }, smooth],
+    [0.55, { u: 5.35, b: -0.2, grip: Math.PI, lean: 0.16 }, snap],
+    [0.72, { u: 5.75, b: -0.35, grip: Math.PI, lean: 0.18 }, smooth],
+    [1, { u: 0.15 + TAU, b: -0.35, grip: TAU - 0.05, lean: 0 }, smooth],
+  ]);
+}
+/** Spear and lance: draw back to the chest, drive straight out, recover. */
+function thrustPose(t: number) {
+  return keyframes(t, [
+    [0, { u: 0.15, b: -0.35, grip: -0.02, lean: 0 }, smooth],
+    [0.3, { u: 0.55, b: -1.7, grip: 2.72, lean: -0.1 }, smooth],
+    [0.5, { u: -1.45, b: -0.05, grip: 3.07, lean: 0.2 }, snap],
+    [0.7, { u: -1.35, b: -0.1, grip: 3.07, lean: 0.18 }, smooth],
+    [1, { u: 0.15, b: -0.35, grip: -0.02, lean: 0 }, smooth],
+  ]);
+}
 export class IsoArena extends Phaser.Scene {
   room: Room;
   mine: string;
@@ -39,6 +115,8 @@ export class IsoArena extends Phaser.Scene {
   fx!: Phaser.GameObjects.Graphics;
   keys!: Record<string, Phaser.Input.Keyboard.Key>;
   rigs = new Map<string, Rig>();
+  spears = new Map<number, Phaser.GameObjects.Image>();
+  aimAngle = 0;
   labels = new Map<string, Phaser.GameObjects.Text>();
   objects: Phaser.GameObjects.GameObject[] = [];
   rendered = new Map<string, { x: number; y: number }>();
@@ -56,6 +134,21 @@ export class IsoArena extends Phaser.Scene {
   zoomLevel = 1.45;
   lastHoof = 0;
   legPhase = 0;
+  localSwing = -1e9;
+  /** Critically damped (zeta=1) or springy (zeta<1) follower; angles take the short way round. */
+  spring(rig: Rig, key: string, target: number, omega: number, dt: number, zeta = 1, angle = true) {
+    const s = (rig.springs[key] ??= { x: target, v: 0 });
+    const steps = Math.max(1, Math.ceil((dt * omega) / 0.4)),
+      h = dt / steps;
+    for (let n = 0; n < steps; n++) {
+      let diff = target - s.x;
+      if (angle) diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      s.v += (omega * omega * diff - 2 * zeta * omega * s.v) * h;
+      s.x += s.v * h;
+    }
+    return s.x;
+  }
+  follow = '';
   constructor(room: Room, id: string) {
     super('isometric-arena');
     this.room = room;
@@ -67,6 +160,11 @@ export class IsoArena extends Phaser.Scene {
       this.load.image(name, '/assets/' + name + '.png');
   }
   create() {
+    const follow = (e: Event) => (this.follow = String((e as CustomEvent).detail ?? ''));
+    window.addEventListener('spectate-follow', follow);
+    this.events.once(Phaser.Scenes.Events.DESTROY, () =>
+      window.removeEventListener('spectate-follow', follow),
+    );
     this.cameras.main.setBackgroundColor('#102128');
     this.ground = this.add.graphics().setDepth(-10000);
     this.fx = this.add.graphics().setDepth(20000);
@@ -112,9 +210,13 @@ export class IsoArena extends Phaser.Scene {
     ) as Record<string, Phaser.Input.Keyboard.Key>;
     this.input.keyboard!.addCapture(['SPACE', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'TAB']);
     const focus = (target: EventTarget | null) => {
+      // Only text entry pauses the controls; checkboxes and sliders (volume, reduced motion) do not.
+      const field = target instanceof Element ? target.closest('input') : null;
       this.typing =
         target instanceof Element &&
-        !!target.closest('input,textarea,select,[contenteditable="true"],[data-chat-controls]');
+        (field
+          ? !NON_TEXT_INPUTS.has(field.type)
+          : !!target.closest('textarea,select,[contenteditable="true"],[data-chat-controls]'));
       this.input.keyboard!.enabled = !this.typing;
       // Phaser captures keys globally; release them so chat receives letters and spaces.
       if (this.typing) this.input.keyboard!.disableGlobalCapture();
@@ -195,7 +297,9 @@ export class IsoArena extends Phaser.Scene {
       const mouse = this.input.activePointer.positionToCamera(
           this.cameras.main,
         ) as Phaser.Math.Vector2,
-        aim = unproject(mouse.x, mouse.y);
+        // Read the cursor at body height, not ground level: riders and thrown spears are drawn
+        // above their ground position, so pointing at a rider must aim at that rider.
+        aim = unproject(mouse.x, mouse.y + (p.mount ? 60 : 30));
       const direction = screenMovement(
         Number(this.keys.D.isDown || this.keys.RIGHT.isDown) -
           Number(this.keys.A.isDown || this.keys.LEFT.isDown),
@@ -207,7 +311,7 @@ export class IsoArena extends Phaser.Scene {
         seq: this.seq++,
         x: blocked ? 0 : direction.x,
         y: blocked ? 0 : direction.y,
-        aim: Math.atan2(aim.y - p.y, aim.x - p.x),
+        aim: (this.aimAngle = Math.atan2(aim.y - p.y, aim.x - p.x)),
         attack: !blocked && (this.input.activePointer.leftButtonDown() || this.queued.attack),
         block: !blocked && this.input.activePointer.rightButtonDown(),
         dodge: !blocked && (this.keys.SPACE.isDown || this.queued.dodge),
@@ -220,14 +324,40 @@ export class IsoArena extends Phaser.Scene {
         (w.tick > 0 || w.mode === 'tutorial')
       ) {
         this.lastSend = time;
+        if (i.attack && time - this.localSwing > 620 && me.stamina >= 12) this.localSwing = time;
         this.room.send('input', i);
         this.pending.push(i);
         this.queued = { attack: false, dodge: false, ability: false, interact: false };
         if (this.pending.length > 90) this.pending.shift();
         move(this.predicted!, i, 1 / 30, w.geometry);
       }
+    } else {
+      // Spectators have no fighter: follow the chosen one, else the first living human.
+      const target =
+        w.players.find((p) => p.id === this.follow) ??
+        w.players.find((p) => !p.bot && p.hp > 0) ??
+        w.players[0];
+      const at = target && this.rendered.get(target.id);
+      if (at) {
+        const point = project(at.x, at.y);
+        this.cameras.main.centerOn(point.x, point.y - 35);
+      }
     }
     this.fx.clear();
+    const rider = w.players.find((q) => q.id === this.mine && q.mount && q.hp > 0),
+      from = rider && this.rendered.get(rider.id);
+    if (from) {
+      // Mounted aiming guide: the spear leaves along this line (wind bends it slightly).
+      this.fx.fillStyle(0xfff1c4, 0.75);
+      for (let d = 40; d <= 220; d += 22) {
+        const dot = project(
+          from.x + Math.cos(this.aimAngle) * d,
+          from.y + Math.sin(this.aimAngle) * d,
+          30,
+        );
+        this.fx.fillCircle(dot.x, dot.y, 2.4);
+      }
+    }
     for (const p of w.players) {
       let r = this.rendered.get(p.id);
       const target = p.id === this.mine && this.predicted ? this.predicted : p;
@@ -537,7 +667,20 @@ export class IsoArena extends Phaser.Scene {
       ])
         root.bringToTop(parts[name]);
     }
-    return { root, parts, shadow, label, health, phase: 0, lastX: p.x, lastY: p.y };
+    return {
+      root,
+      parts,
+      shadow,
+      label,
+      health,
+      phase: 0,
+      lastX: p.x,
+      lastY: p.y,
+      attackId: p.attackId,
+      swingStart: -1e9,
+      blockUntil: 0,
+      springs: {},
+    };
   }
   drawActor(p: Fighter, x: number, y: number, time: number, w: World) {
     let rig = this.rigs.get(p.id);
@@ -557,9 +700,11 @@ export class IsoArena extends Phaser.Scene {
     const point = project(x, y),
       speed = Math.hypot(p.vx, p.vy),
       moving = speed > 12,
+      dt = Phaser.Math.Clamp((time - (rig.lastTime ?? time)) / 1000, 0, 0.05),
       phase = (rig.phase +=
         (Math.min(35, Math.hypot(x - rig.lastX, y - rig.lastY)) * Math.PI) / 48),
       stride = moving ? Math.sin(phase) * 0.48 : 0;
+    rig.lastTime = time;
     rig.lastX = x;
     rig.lastY = y;
     this.legPhase = p.id === this.mine ? stride : this.legPhase;
@@ -571,17 +716,46 @@ export class IsoArena extends Phaser.Scene {
       Math.sin(p.mount?.heading ?? p.aim),
     );
     rig.root.setScale(facing.x < 0 ? -0.78 : 0.78, 0.78);
-    const parts = rig.parts;
-    const offset = p.mount ? -35 : 0,
-      active = moving && p.hp > 0 && p.stun <= 0;
-    const swing =
-      p.attack > 0 ? Math.sin(Phaser.Math.Clamp((0.34 - p.attack) / 0.34, 0, 1) * Math.PI) : 0;
+    const parts = rig.parts,
+      mine = p.id === this.mine,
+      offset = p.mount ? -35 : 0,
+      alive = p.hp > 0,
+      active = moving && alive && p.stun <= 0,
+      run = active && !p.mount ? Phaser.Math.Clamp((speed - 90) / 150, 0, 1) : 0,
+      spear = p.role === 'spear' || !!p.mount;
+    // Swings run on a client clock started by each new attack, so the arc is smooth between
+    // 15 Hz snapshots. The local player starts it on click instead of waiting a round trip.
+    if (p.attackId !== rig.attackId) {
+      rig.attackId = p.attackId;
+      if (!(mine && time - rig.swingStart < 450)) rig.swingStart = time;
+    }
+    if (mine && this.localSwing > rig.swingStart) rig.swingStart = this.localSwing;
+    const swingT = (time - rig.swingStart) / SWING_MS,
+      swinging = alive && swingT >= 0 && swingT < 1;
+    // Your own guard reacts to the predicted input immediately; others hold it briefly so the
+    // AI's one-tick blocks read as a guard rather than a flicker.
+    const blockNow = alive && (mine && this.predicted ? this.predicted.block : p.block);
+    if (blockNow) rig.blockUntil = time + (mine ? 0 : 250);
+    const guarding = alive && (blockNow || time < rig.blockUntil);
+    const guard = this.spring(rig, 'guard', guarding && !swinging ? 1 : 0, 24, dt, 1, false);
+    const dodging = alive && p.invulnerable > 0 && p.dodge > 0.75,
+      hurt = alive && p.stun > 0;
+    const key = swinging ? (spear ? thrustPose(swingT) : slashPose(swingT)) : null;
+    const lean = this.spring(
+      rig,
+      'lean',
+      !alive ? 0 : dodging ? 0.34 : hurt ? -0.2 : run * 0.14 + (key?.lean ?? 0) - guard * 0.05,
+      16,
+      dt,
+    );
+    const crouch = guard * 3 + (dodging ? 9 : 0) + (key ? Math.max(0, key.lean) * 12 : 0);
     const limb = (
       upper: string,
       lower: string,
       boot: string,
       hip: { x: number; y: number },
       foot: { x: number; y: number },
+      roll: number,
       length = 26,
     ) => {
       const knee = joint(hip, foot, length, length, -1);
@@ -591,54 +765,101 @@ export class IsoArena extends Phaser.Scene {
       parts[lower]
         .setPosition(knee.x, knee.y)
         .setRotation(Math.atan2(foot.y - knee.y, foot.x - knee.x) - Math.PI / 2);
-      parts[boot].setPosition(foot.x + 3, foot.y).setRotation(active ? Math.sin(phase) * 0.1 : 0);
+      parts[boot].setPosition(foot.x + 3, foot.y).setRotation(roll);
     };
+    // The torso pivots at the shoulders, so a forward lean pushes the hips back.
+    const hipX = -lean * 36;
     for (const [side, dx, shift] of [
       ['front', -11, 0],
       ['back', 11, Math.PI],
     ] as const) {
-      const f = active ? gaitFoot(phase + shift, speed > 240 ? 20 : 16) : { x: 0, y: 0 };
+      const f = active
+        ? runFoot(phase + shift, run, speed > 240 ? 1 : 0.85)
+        : { x: 0, y: 0, roll: 0 };
+      // Stance widens under a guard or lunge.
+      const brace =
+        (guard * 4 + (key ? Math.max(0, key.lean) * 30 : 0)) * (side === 'front' ? -1 : 1);
       limb(
         side + 'Thigh',
         side + 'Shin',
         side + 'Boot',
-        { x: dx, y: -34 + offset },
-        { x: dx + (p.mount ? 7 : f.x), y: p.mount ? -27 : 10 + f.y },
+        { x: dx + hipX, y: -34 + offset + crouch },
+        { x: dx + (p.mount ? 7 : f.x + brace), y: p.mount ? -27 : 10 + f.y },
+        p.mount ? 0 : f.roll,
       );
     }
-    const bob = active ? Math.cos(phase * 2) * 1.2 : Math.sin(time * 0.0018) * 0.4;
-    parts.torso.setPosition(0, -78 + offset + bob).setRotation(p.dodge > 0 ? -0.16 : 0);
-    parts.cape.setPosition(-5, -76 + offset).setRotation(active ? Math.sin(phase) * 0.08 : 0);
-    parts.head.setPosition(0, -92 + offset + bob);
+    // Pelvis bob at twice the stride frequency; the body rides lower when sprinting.
+    const bob = active
+      ? Math.cos(phase * 2) * (1 + 1.6 * run) - run * 1.5
+      : Math.sin(time * 0.0018) * 0.4;
+    const bodyY = offset + bob + crouch;
+    parts.torso.setPosition(0, -78 + bodyY).setRotation(lean);
+    parts.head.setPosition(lean * 6, -92 + bodyY).setRotation(lean * 0.5);
+    const cape = this.spring(
+      rig,
+      'cape',
+      run * 0.4 + lean * 0.6 + (active ? Math.sin(phase) * 0.08 : 0) - (key ? 0.15 : 0),
+      9,
+      dt,
+      0.55,
+    );
+    parts.cape.setPosition(-5 - lean * 4, -76 + bodyY).setRotation(cape);
     const arm = (upper: string, lower: string, sx: number, rotation: number, bend: number) => {
-      const shoulder = { x: sx, y: -66 + offset + bob },
-        elbow = { x: sx - Math.sin(rotation) * 22, y: shoulder.y + Math.cos(rotation) * 22 };
+      const shoulder = { x: sx - lean * 12, y: -66 + bodyY + Math.abs(lean) * 2 },
+        elbow = {
+          x: shoulder.x - Math.sin(rotation) * 22,
+          y: shoulder.y + Math.cos(rotation) * 22,
+        };
       const a = rotation + bend;
       parts[upper].setPosition(shoulder.x, shoulder.y).setRotation(rotation);
       parts[lower].setPosition(elbow.x, elbow.y).setRotation(a);
-      return { x: elbow.x - Math.sin(a) * 22, y: elbow.y + Math.cos(a) * 22 };
+      return { x: elbow.x - Math.sin(a) * 22, y: elbow.y + Math.cos(a) * 22, angle: a };
     };
-    const walk = active && !p.mount ? Math.sin(phase) * 0.62 : 0;
+    // Arms counter-swing the legs; elbows bend more as the warrior speeds up.
+    const swingArm = active && !p.mount ? Math.sin(phase) * (0.3 + 0.45 * run) : 0;
+    let wU = p.mount ? -0.8 : 0.15 - swingArm,
+      wB = p.mount ? -0.25 : -0.35 - 0.9 * run,
+      grip = spear ? -0.02 : -0.05,
+      sU = p.mount ? -0.5 : 0.05 + swingArm,
+      sB = -0.35 - 0.8 * run;
+    // Raised guard: shield arm forward with the forearm up, shield square in front of the chest.
+    wU = mix(wU, 0.35, guard);
+    wB = mix(wB, -1.2, guard);
+    sU = mix(sU, -1.3, guard);
+    sB = mix(sB, -0.45, guard);
+    if (key) {
+      wU = key.u;
+      wB = key.b;
+      grip = key.grip;
+      sU = mix(sU, 0.4, 0.6);
+    }
+    if (!alive) {
+      wU = 0.4;
+      sU = -0.3;
+    }
+    const tight = key ? 70 : 20;
     const hand = arm(
       'upperArm',
       'forearm',
       23,
-      p.mount ? -0.8 : swing ? -swing * 1.35 : walk,
-      p.mount ? -0.25 : -0.3 - swing * 0.5,
+      this.spring(rig, 'wU', wU, tight, dt),
+      this.spring(rig, 'wB', wB, tight, dt),
     );
     const shieldHand = arm(
       'backUpperArm',
       'backForearm',
       -23,
-      p.block ? 0.65 : p.mount ? -0.5 : -walk,
-      p.block ? -1.15 : -0.35,
+      this.spring(rig, 'sU', sU, 22, dt),
+      this.spring(rig, 'sB', sB, 22, dt),
     );
     parts.weapon
       .setPosition(hand.x, hand.y)
-      .setRotation(p.role === 'spear' || p.mount ? -0.22 - swing * 0.75 : -0.25 - swing * 2.05);
+      .setRotation(hand.angle + this.spring(rig, 'grip', grip, key ? 70 : 24, dt))
+      // A thrown spear leaves the hand until it lands; a new one is drawn for the next pass.
+      .setVisible(!w.projectiles.some((a) => a.owner === p.id && a.kind === 'spear'));
     parts.shield
-      .setPosition(shieldHand.x, shieldHand.y - 7)
-      .setRotation(p.block ? -0.25 : -walk * 0.15);
+      .setPosition(shieldHand.x + guard * 3, shieldHand.y - 7 + guard * 9)
+      .setRotation(mix(-swingArm * 0.15, -0.06, guard));
     if (p.mount) {
       for (let n = 0; n < 4; n++) {
         const hip = { x: n < 2 ? -29 : 28, y: -12 + (n % 2 ? -3 : 0) },
@@ -680,12 +901,20 @@ export class IsoArena extends Phaser.Scene {
       }
     }
     if (p.hp <= 0) {
-      rig.root.setRotation(0.95);
+      // Fall over with an eased, accelerating topple instead of snapping flat.
+      const t = Math.min(1, (time - (rig.deadAt ?? time)) / 420);
+      rig.root.setRotation(1.25 * t * t * (3 - 2 * t));
       for (const part of Object.values(parts)) part.setTint(0x716757);
     } else {
-      rig.root.setRotation(p.stun > 0 ? -0.08 : 0);
+      rig.root.setRotation(hurt ? -0.08 : 0);
       for (const part of Object.values(parts)) part.clearTint();
       parts.torso.setTint(p.hero === 1 ? 0xe0f0cf : p.hero === 2 ? 0xc5d6a0 : 0xffffff);
+      if (p.armor === 'royal-feast') {
+        // Royal Feast set from the lunch gathering perk: gilded plate, emerald cape.
+        for (const name of ROYAL_FEAST_GOLD) parts[name]?.setTint(0xffd36b);
+        parts.cape.setTint(0x2fa877);
+        parts.shield.setTint(0xffe7a0);
+      }
     }
     rig.label
       .setPosition(point.x, point.y - (p.mount ? 135 : 104))
@@ -705,11 +934,15 @@ export class IsoArena extends Phaser.Scene {
       this.fx.lineStyle(2, 0xf7d58b, 0.8);
       this.fx.strokeEllipse(point.x, point.y + 5, p.mount ? 85 : 55, p.mount ? 35 : 24);
     }
-    if (p.block) {
-      this.fx.lineStyle(4, 0x93f5ed, 0.75);
+    if (guard > 0.5) {
+      this.fx.lineStyle(3, 0x93f5ed, 0.35 + 0.4 * guard);
       this.fx.strokeEllipse(point.x, point.y - 35, 62, 75);
     }
-    if (p.attack > 0) {
+    if (alive && p.armor === 'royal-feast') {
+      this.fx.lineStyle(2, 0xffd36b, 0.35 + 0.2 * Math.sin(time * 0.005));
+      this.fx.strokeEllipse(point.x, point.y + 5, 48, 21);
+    }
+    if (swinging && swingT > 0.3 && swingT < 0.85) {
       const a = project(Math.cos(p.aim) * 80, Math.sin(p.aim) * 80);
       this.fx.lineStyle(12, 0xffbf48, 0.2);
       this.fx.lineBetween(point.x, point.y - 35, point.x + a.x, point.y + a.y - 35);
@@ -728,7 +961,7 @@ export class IsoArena extends Phaser.Scene {
         this.fx.strokePath();
         const reduced = useUI.getState().reducedMotion,
           angle = Math.atan2(a.y, a.x),
-          progress = Phaser.Math.Clamp((0.34 - p.attack) / 0.34, 0, 1);
+          progress = Phaser.Math.Clamp((swingT - 0.3) / 0.55, 0, 1);
         for (const [width, color, alpha] of [
           [17, 0xc84318, 0.3],
           [10, 0xff7b22, 0.65],
@@ -915,14 +1148,33 @@ export class IsoArena extends Phaser.Scene {
     } else this.boss?.setVisible(false);
   }
   drawEffects(w: World, time: number) {
+    // Thrown spears fly as the real spear sprite, pointing along their flight path.
+    const flying = new Set<number>();
+    for (const a of w.projectiles.filter((a) => a.kind === 'spear')) {
+      flying.add(a.id);
+      let sprite = this.spears.get(a.id);
+      if (!sprite) {
+        sprite = this.add.image(0, 0, 'rig-v3', 'cell8').setOrigin(0.5, 0.5);
+        sprite.setScale(Math.min(19 / sprite.frame.width, 88 / sprite.frame.height) * 0.78);
+        this.spears.set(a.id, sprite);
+      }
+      const at = project(a.x, a.y, 30),
+        ahead = project(a.x + a.vx * 0.04, a.y + a.vy * 0.04, 30);
+      sprite
+        .setPosition(at.x, at.y)
+        .setRotation(Math.atan2(ahead.y - at.y, ahead.x - at.x) + Math.PI / 2)
+        .setDepth(at.y + 40);
+    }
+    for (const [id, sprite] of this.spears)
+      if (!flying.has(id)) {
+        sprite.destroy();
+        this.spears.delete(id);
+      }
     for (const a of w.projectiles) {
+      if (a.kind === 'spear') continue;
       const p = project(a.x, a.y, 30),
         last = project(a.x - a.vx * 0.04, a.y - a.vy * 0.04, 30);
-      this.fx.lineStyle(
-        a.kind === 'spear' ? 5 : 3,
-        a.owner === 'boss' || a.kind === 'magic' ? 0xc49bff : 0xffec9f,
-        0.9,
-      );
+      this.fx.lineStyle(3, a.owner === 'boss' || a.kind === 'magic' ? 0xc49bff : 0xffec9f, 0.9);
       this.fx.lineBetween(p.x, p.y, last.x, last.y);
     }
     for (const e of w.events) {

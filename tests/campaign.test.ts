@@ -5,6 +5,7 @@ import {
   emptyInput,
   stepCampaign,
   sequenceFor,
+  missionTier,
 } from '../packages/shared/src/campaign';
 import {
   completeMission,
@@ -181,7 +182,7 @@ it('awards protection honor once to an active defender after the oath is secured
   expect(p.honor).toBe(40);
 });
 it('places checkpoint ambushes outside terrain obstacles and river water', () => {
-  for (const id of [5, 7]) {
+  for (const id of [7]) {
     const w = make(id, false),
       p = w.players[0],
       bearer = fighter('bearer', 'Bearer');
@@ -217,4 +218,59 @@ it('solves three distinct receiver alignments in the normal observatory', () => 
   }
   expect(w.finished).toBe(true);
   expect(c.mirrorRound).toBe(3);
+});
+
+it('ramps difficulty: the oath unleashes one monster at a time and the bearer fights back', () => {
+  const w = make(1, false),
+    enemies = () => w.players.filter((q) => q.team === 1 && q.hp > 0);
+  stepCampaign(w, new Map());
+  expect(enemies()).toHaveLength(1);
+  const bearer = w.players.find((q) => q.id === 'trainee')!;
+  expect(bearer.maxHp).toBe(300);
+  let most = 0;
+  // Keep the human out of the fight for 90 seconds of simulated time.
+  for (let n = 0; n < 30 * 90 && !w.finished; n++) {
+    w.players[0].hp = 100;
+    stepCampaign(w, new Map());
+    most = Math.max(most, enemies().length);
+  }
+  expect(most).toBeLessThanOrEqual(2);
+  expect(bearer.attackId).toBeGreaterThan(0);
+  // Early monsters are weaker than the final mission's.
+  const early = make(1, false),
+    late = make(15, false);
+  expect(missionTier(1)).toBe(0);
+  expect(missionTier(15)).toBe(1);
+  stepCampaign(early, new Map());
+  const first = early.players.find((q) => q.team === 1)!;
+  expect(first.maxHp).toBeLessThan(85);
+  expect(late.campaign!.missionId).toBe(15);
+});
+it('holds the ford: raiders drain it, clearing every wave wins', () => {
+  const lost = make(5, false),
+    enemies = (w: typeof lost) => w.players.filter((q) => q.team === 1 && q.hp > 0);
+  stepCampaign(lost, new Map());
+  const ford = lost.campaign!.markers[0];
+  expect(ford.value).toBe(100);
+  expect(enemies(lost)).toHaveLength(1);
+  // A monster parked on the ford drains it until the ford falls.
+  enemies(lost)[0].x = ford.x;
+  enemies(lost)[0].y = ford.y;
+  lost.players[0].x = 100;
+  for (let n = 0; n < 30 * 40 && !lost.finished; n++) {
+    enemies(lost)[0].x = ford.x;
+    enemies(lost)[0].y = ford.y;
+    lost.players[0].hp = 100;
+    stepCampaign(lost, new Map());
+  }
+  expect(lost.finished).toBe(true);
+  expect(lost.winner).toBe(1);
+  const won = make(5, false);
+  for (let n = 0; n < 30 * 60 && !won.finished; n++) {
+    for (const e of enemies(won)) e.hp = 0;
+    stepCampaign(won, new Map());
+  }
+  expect(won.finished).toBe(true);
+  expect(won.winner).toBe(0);
+  expect(won.campaign!.wave).toBe(3);
 });

@@ -1,6 +1,6 @@
 # Deploy ክብረ ጉግስ: free Render + free Supabase
 
-Team chat uses Socket.IO on the same backend origin and port as Colyseus. Route `/socket.io/` polling and WebSocket upgrades to that backend. Apply migration `005_team_chat.sql` after the existing migrations. Set `WALLET_ORIGIN` to the actual frontend origin (including a same-origin Render frontend), and include separate frontend origins in `CORS_ORIGINS`. No separate chat service/key is required. Verify gameplay and chat with two devices and a reconnect after deployment.
+Team chat uses Socket.IO on the same backend origin and port as Colyseus. Route `/socket.io/` polling and WebSocket upgrades to that backend. Apply migrations `005_team_chat.sql` and `006_social.sql` after the existing migrations. Notifications (`/notify`) and spectators (`/spectate`) use the same Socket.IO server. Set `WALLET_ORIGIN` to the actual frontend origin (including a same-origin Render frontend), and include separate frontend origins in `CORS_ORIGINS`. No separate chat service/key is required. Verify gameplay and chat with two devices and a reconnect after deployment.
 
 One Render web service builds the web app and serves it together with the API and Colyseus WebSocket from the same origin. Supabase Postgres holds authoritative records, auth and private storage. SQLite is for local development. No Vercel, Railway, Neon or persistent disk is required.
 
@@ -30,7 +30,7 @@ Self-hosted vision runtime/model/OCR files and licenses are included under apps/
 
 ## 2. Apply only pending Supabase migrations
 
-In the existing project's SQL editor apply 002_campaign.sql if still pending, then 003_runtime.sql, 004_evidence_cleanup.sql and 005_team_chat.sql. For CLI-managed installations inspect supabase migration list first. Do not rerun 001, delete the project or use supabase db reset on production.
+In the existing project's SQL editor apply 002_campaign.sql if still pending, then 003_runtime.sql, 004_evidence_cleanup.sql, 005_team_chat.sql and 006_social.sql (friends, notifications and tournaments). With the GitHub integration, record already-applied versions in supabase_migrations.schema_migrations first so they are not rerun. For CLI-managed installations inspect supabase migration list first. Do not rerun 001, delete the project or use supabase db reset on production.
 
 003 adds a private game_runtime schema and copies existing hosted records without overwriting runtime rows. Existing public tables remain as legacy records; all new game writes/reads use game_runtime. Do not expose this schema in the Data API. Canonical game IDs remain distinct from linked Supabase auth IDs. Distinct accounts are not automatically merged.
 

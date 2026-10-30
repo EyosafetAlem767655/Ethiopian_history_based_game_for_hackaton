@@ -50,6 +50,8 @@ test('a solo judge completes every chapter through browser controls', async ({ p
   for (const id of DEMO_MISSIONS) {
     if (id === 12) {
       await page.getByRole('button', { name: /OPEN THE LUNCH PASS/ }).click();
+      // Forming the squad invites the player to verify their identity; the demo continues.
+      await page.getByRole('button', { name: 'LATER' }).click();
       await page.getByRole('button', { name: /VIEW PASS/ }).click();
       await page.getByRole('button', { name: /SIMULATE GATHERING/ }).click();
     }

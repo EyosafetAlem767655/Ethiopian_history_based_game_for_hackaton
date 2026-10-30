@@ -27,7 +27,25 @@ beforeAll(async () => {
   throw Error(log);
 }, 30000);
 afterAll(() => child?.kill());
-it('protects all human room types and private invites while allowing solo, avatars and private review status', async () => {
+it('lets guests play guests but keeps them out of reviewed adult pools', async () => {
+  const a = await (await request('/session', undefined, { name: 'Guest A', demo: true })).json(),
+    b = await (await request('/session', undefined, { name: 'Guest B', demo: true })).json();
+  const squad = await (await request('/squad', a, {})).json();
+  expect((await request('/squad', b, { code: squad.code })).status).toBe(200);
+  const c = new Client(base.replace('http', 'ws'));
+  const options = { squadId: squad.id, ageBand: 'guest' };
+  const first = await c.joinOrCreate('squad-lobby', { ...options, token: a.token });
+  const second = await c.joinOrCreate('squad-lobby', { ...options, token: b.token });
+  for (const room of [first, second])
+    for (const name of ['members', 'chat', 'start']) room.onMessage(name, () => {});
+  expect(second.roomId).toBe(first.roomId);
+  await Promise.all([first.leave(), second.leave()]);
+  // A guest cannot claim an adult band.
+  await expect(
+    c.joinOrCreate('squad-lobby', { squadId: squad.id, ageBand: '18–24', token: a.token }),
+  ).rejects.toThrow(/reviewed/);
+});
+it('protects adult room types and private invites while allowing solo, avatars and private review status', async () => {
   const a = await (
       await request('/session', undefined, { name: 'Unreviewed A', demo: true })
     ).json(),
@@ -43,8 +61,6 @@ it('protects all human room types and private invites while allowing solo, avata
     await expect(
       c.create(room, { ...options, protocol: 2, demo: true, ageBand: '18–24', token: a.token }),
     ).rejects.toThrow(/reviewed/);
-  const squad = await (await request('/squad', a, {})).json();
-  expect((await request('/squad', b, { code: squad.code })).status).toBe(403);
   const solo = await c.create('battle', {
     mode: 'tutorial',
     protocol: 2,

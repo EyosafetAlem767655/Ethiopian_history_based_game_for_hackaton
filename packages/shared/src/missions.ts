@@ -5,7 +5,7 @@ export type MissionKind =
   | 'ride'
   | 'landmarks'
   | 'joust'
-  | 'courier'
+  | 'outpost'
   | 'conquest'
   | 'escort'
   | 'rescue'
@@ -74,13 +74,13 @@ export const MISSIONS: MissionDefinition[] = [
   {
     id: 5,
     chapter: 1,
-    name: 'Gojjam · The Stranded Courier',
-    kind: 'courier',
+    name: 'Gojjam · Hold the Ford',
+    kind: 'outpost',
     biome: 'mud',
     minutes: 4,
-    mounted: true,
+    mounted: false,
     guide:
-      'Find the stranded courier. Hold E nearby to rescue them, then protect their route through the muddy checkpoints.',
+      'Ride to the ford in the far corner and defend it. Monsters attack in waves; if they stand on the ford its strength drains. Defeat every wave to win.',
   },
   {
     id: 6,

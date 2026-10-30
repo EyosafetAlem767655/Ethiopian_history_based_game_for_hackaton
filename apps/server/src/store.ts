@@ -1,6 +1,7 @@
 import type { AvatarSpec } from '../../../packages/shared/src/customization';
 import { db, persistence } from './database';
 export { db } from './database';
+import { notify } from './notify';
 import {
   freshCampaign,
   completeMission,
@@ -167,8 +168,74 @@ async function resultIdentity(id: string): Promise<ResultIdentity> {
       }
     : { kind: 'profile' };
 }
-export const issueBadge = async (id: string, badge: string, match: string) =>
-  await db.prepare('INSERT OR IGNORE INTO badges VALUES (?,?,?)').run(id, badge, match);
+export async function issueBadge(id: string, badge: string, match: string) {
+  const out = await db.prepare('INSERT OR IGNORE INTO badges VALUES (?,?,?)').run(id, badge, match);
+  if (out.changes) await notify(id, 'badge', `Achievement unlocked: ${badge}.`, { badge });
+  // The lunch gathering perk: completing the Royal Gathering grants the Royal Feast armor.
+  if (out.changes && badge === 'Proof of Fellowship') await unlockArmor(id, ROYAL_FEAST);
+  return out;
+}
+export const ROYAL_FEAST = 'royal-feast';
+export const armorSets = ['standard', ROYAL_FEAST] as const;
+/** Perks (lunch coverage, reward armor) are reserved for identity-verified adult accounts. */
+export async function identityVerified(id: string) {
+  try {
+    const review = await db
+      .prepare(
+        'SELECT status FROM age_reviews WHERE player_id=? ORDER BY created DESC,id DESC LIMIT 1',
+      )
+      .get(id);
+    const hosted = await db.prepare('SELECT id FROM hosted_identities WHERE id=?').get(id);
+    return review?.status === 'approved' && !!hosted;
+  } catch {
+    return false; // Review tables are absent in minimal setups: nobody is verified.
+  }
+}
+/** Grant rewards that were earned before the player verified their identity. */
+export async function claimPendingPerks(id: string) {
+  const p = await profile(id);
+  const pending = p?.progress.armorPending ?? [];
+  if (!p || !pending.length) return;
+  p.progress.armorPending = [];
+  await saveProfile(p);
+  for (const armor of pending) await unlockArmor(id, armor);
+}
+export async function unlockArmor(id: string, armor: string) {
+  const p = await profile(id);
+  if (!p) return;
+  const owned = new Set(p.progress.armor ?? []);
+  if (owned.has(armor)) return;
+  if (!(await identityVerified(id))) {
+    // Earned but held until the account is verified.
+    p.progress.armorPending = [...new Set([...(p.progress.armorPending ?? []), armor])];
+    await saveProfile(p);
+    await notify(
+      id,
+      'armor-pending',
+      'Royal Feast armor reserved for you. Verify your identity to claim it and the lunch perk.',
+      { armor },
+    );
+    return;
+  }
+  owned.add(armor);
+  p.progress.armor = [...owned];
+  p.progress.equipped = armor;
+  await saveProfile(p);
+  await notify(
+    id,
+    'armor',
+    'New armor unlocked: Royal Feast. It is equipped for your next battle.',
+    {
+      armor,
+    },
+  );
+}
+/** The armor a fighter wears in battle, if the player owns and equipped it. */
+export function equippedArmor(p: Profile) {
+  return p.progress.equipped === ROYAL_FEAST && p.progress.armor?.includes(ROYAL_FEAST)
+    ? ROYAL_FEAST
+    : undefined;
+}
 export function recordResult(id: string, w: World, started: string) {
   return db.transaction(async () => {
     if (await db.prepare('SELECT id FROM results WHERE id=?').get(id)) return false;

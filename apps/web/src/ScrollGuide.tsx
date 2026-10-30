@@ -13,13 +13,20 @@ export function ScrollGuide({
   const reduced = useUI((s) => s.reducedMotion),
     [replay, setReplay] = useState(0),
     [history, setHistory] = useState<string[]>([]),
-    [open, setOpen] = useState(false);
+    [open, setOpen] = useState(false),
+    [compact, setCompact] = useState(false);
   useEffect(() => {
     setHistory((h) => (h.at(-1) === message ? h : [...h.slice(-9), message]));
     audio.play('scroll');
+    // Show each new instruction in full, then fold the scroll so the battlefield stays visible.
+    setCompact(false);
+    const fold = setTimeout(() => setCompact(true), 6000);
+    return () => clearTimeout(fold);
   }, [id, message]);
   return (
-    <div className={'scroll-guide ' + (reduced ? 'reduced-motion' : '')}>
+    <div
+      className={'scroll-guide ' + (reduced ? 'reduced-motion ' : '') + (compact ? 'compact' : '')}
+    >
       <div className="scroll-paper" key={id + '-' + replay}>
         <div
           className="scroll-insignia guide-illustration"
@@ -44,6 +51,12 @@ export function ScrollGuide({
         </div>
       </div>
       <div className="scroll-tools">
+        <button
+          aria-label={compact ? 'Expand guide' : 'Fold guide'}
+          onClick={() => setCompact((v) => !v)}
+        >
+          {compact ? '▾' : '▴'}
+        </button>
         <button
           aria-label="Replay guide animation"
           onClick={() => {

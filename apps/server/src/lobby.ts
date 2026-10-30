@@ -1,5 +1,5 @@
 import { assertHumanBand, readAvatar } from './customization';
-import { ageBands } from '../../../packages/shared/src/customization';
+import { isMatchPool } from '../../../packages/shared/src/customization';
 import { Room, type Client } from '@colyseus/core';
 import { authenticate, db, type Profile } from './store';
 export class SquadLobby extends Room {
@@ -17,7 +17,7 @@ export class SquadLobby extends Room {
   started = false;
   onCreate(o: { ageBand?: string; squadId: string }) {
     this.setMetadata({ squadId: o.squadId, ageBand: o.ageBand ?? 'solo' });
-    if (!ageBands.includes(o.ageBand as any)) this.maxClients = 1;
+    if (!isMatchPool(o.ageBand)) this.maxClients = 1;
     this.clock.setInterval(() => this.broadcast('members', [...this.members.values()]), 1000);
     this.onMessage('chat', (c, data) => {
       const now = Date.now();

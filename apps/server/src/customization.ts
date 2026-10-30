@@ -5,13 +5,23 @@ import {
   avatarSchema,
   defaultAvatar,
   ageBand,
-  ageBands,
   birthISO,
+  GUEST_POOL,
+  isMatchPool,
+  type MatchPool,
   birthInput,
   type AgeEligibility,
 } from '../../../packages/shared/src/customization';
 import { db } from './database';
 import { supabase, isHosted } from './hosted';
+import { notify } from './notify';
+import { claimPendingPerks } from './store';
+const REVIEW_MESSAGES: Record<string, string> = {
+  approved:
+    'Identity verified: you are eligible for adult matchmaking, the lunch perk and reserved rewards.',
+  rejected: 'Identity review declined. Guest play continues; you may submit a clearer Fayda image.',
+  resubmit: 'Identity review needs a clearer Fayda image. Please submit again.',
+};
 
 await db.exec(`CREATE TABLE IF NOT EXISTS avatars(player_id TEXT PRIMARY KEY,data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS age_reviews(id TEXT PRIMARY KEY,player_id TEXT NOT NULL,status TEXT NOT NULL,path TEXT,birth_date TEXT,created INTEGER NOT NULL,expires INTEGER NOT NULL,reviewer TEXT,reviewed INTEGER);
@@ -38,23 +48,35 @@ export async function eligibility(id: string): Promise<AgeEligibility> {
     band,
     label: band
       ? '18+ — document reviewed'
-      : 'Human play requires Fayda review. Solo, bots and demo remain available.',
+      : 'Guest pool: you play other guests. Verify your identity to join adult age-band matchmaking.',
   };
 }
+/** The matchmaking pool a player belongs to: their reviewed age band, otherwise the guest pool. */
+export async function matchPool(id: string): Promise<MatchPool> {
+  return (await eligibility(id)).band ?? GUEST_POOL;
+}
 export async function assertHumanBand(id: string, band: unknown) {
-  const e = await eligibility(id);
-  if (!ageBands.includes(band as any) || !e.band || e.band !== band)
+  if (!isMatchPool(band) || (await matchPool(id)) !== band)
     throw Object.assign(
       Error(
-        'Human play requires reviewed adult accounts in the same age band. Use solo/bots while awaiting review.',
+        band === GUEST_POOL
+          ? 'Reviewed adults play in their age band, not the guest pool.'
+          : 'Adult matchmaking requires reviewed accounts in the same age band. Guests play in the guest pool.',
       ),
       { status: 403 },
     );
 }
 export async function assertParty(ids: string[]) {
   if (ids.length < 2) return;
-  const band = (await eligibility(ids[0])).band;
-  for (const id of ids) await assertHumanBand(id, band);
+  const pool = await matchPool(ids[0]);
+  for (const id of ids)
+    if ((await matchPool(id)) !== pool)
+      throw Object.assign(
+        Error(
+          'Squads must share a matchmaking pool: all guests, or reviewed adults in the same age band.',
+        ),
+        { status: 403 },
+      );
 }
 function imageType(bytes: Buffer) {
   if (bytes.length < 12) return '';
@@ -131,6 +153,12 @@ export function registerCustomization(app: Express) {
         )
         .run(id, p.id, 'pending', path, birth, now, now + 86400000);
     })();
+    await notify(
+      p.id,
+      'age-review',
+      'ID submitted. A reviewer will check it and you will be notified of your eligibility.',
+      { status: 'pending' },
+    );
     r.json({ id, expires: now + 86400000 });
   });
   app.post(
@@ -275,8 +303,14 @@ export function registerCustomization(app: Express) {
         return;
       }
       await deleteEvidence(row);
-      return { status: v.decision };
+      return { status: v.decision, player: row.player_id as string };
     })();
-    if (saved) r.json(saved);
+    if (!saved) return;
+    // Tell the player their eligibility, and release perks that were waiting on verification.
+    await notify(saved.player, 'age-review', REVIEW_MESSAGES[saved.status], {
+      status: saved.status,
+    });
+    if (saved.status === 'approved') await claimPendingPerks(saved.player);
+    r.json({ status: saved.status });
   });
 }

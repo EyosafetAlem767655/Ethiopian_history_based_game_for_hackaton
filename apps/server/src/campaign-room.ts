@@ -1,5 +1,5 @@
 import { assertHumanBand, readAvatar } from './customization';
-import { ageBands } from '../../../packages/shared/src/customization';
+import { isMatchPool } from '../../../packages/shared/src/customization';
 import { Room, type Client } from '@colyseus/core';
 import { z } from 'zod';
 import {
@@ -13,12 +13,15 @@ import {
 import { campaignWorld, stepCampaign, equipCampaign } from '../../../packages/shared/src/campaign';
 import { MISSIONS, missionEligibility } from '../../../packages/shared/src/missions';
 import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
+import { publishSnapshot, registerLive, unregisterLive } from './live';
+import { notify } from './notify';
 import {
   authenticate,
   campaignProgress,
   db,
   recordResult,
   saveProfile,
+  equippedArmor,
   type Profile,
 } from './store';
 export class CampaignRoom extends Room {
@@ -44,7 +47,7 @@ export class CampaignRoom extends Room {
     const id = z.number().int().min(1).max(15).parse(o.missionId);
     if (id <= 5) this.roles = ['guardian', 'spear', 'archer', 'rider'];
     this.w = campaignWorld(id, !!o.demo);
-    this.maxClients = o.squadId && id !== 4 && ageBands.includes(o.ageBand as any) ? 4 : 1;
+    this.maxClients = o.squadId && id !== 4 && isMatchPool(o.ageBand) ? 4 : 1;
     this.setMetadata({
       missionId: id,
       demo: !!o.demo,
@@ -53,6 +56,13 @@ export class CampaignRoom extends Room {
       ageBand: o.ageBand ?? 'solo',
     });
     if (!o.squadId) void this.setPrivate(true);
+    const mission = MISSIONS.find((m) => m.id === id);
+    registerLive(this.roomId, {
+      label: 'Campaign · ' + (mission?.name ?? 'Mission ' + id),
+      demo: !!o.demo,
+      started: Date.now(),
+      world: () => this.w,
+    });
     this.onMessage('input', (c, data) => {
       const parsed = inputSchema.safeParse(data),
         id = this.ids.get(c.sessionId);
@@ -128,6 +138,7 @@ export class CampaignRoom extends Room {
       f.hp = replacement.hp;
     }
     f.avatar = p.avatar;
+    f.armor = equippedArmor(p);
     this.w.players.push(f);
     const progress = await campaignProgress(p.id);
     f.prestige = progress.honor + (progress.contribution ?? 0);
@@ -155,6 +166,9 @@ export class CampaignRoom extends Room {
   }
   update() {
     if (this.w.finished) {
+      // A finished squad mission stays open briefly to deliver its result; lock it so a retry
+      // creates a fresh room instead of matching this one.
+      if (!this.locked) void this.lock();
       if (!this.recorded && !this.saving && Date.now() >= this.retryAt) void this.settle();
       return;
     }
@@ -165,7 +179,8 @@ export class CampaignRoom extends Room {
       return;
     }
     const m = MISSIONS[this.w.campaign!.missionId - 1];
-    const party = m.kind === 'joust' ? 1 : 4;
+    // Chapter I is fought alone; AI companions join the party from Chapter II onward.
+    const party = m.kind === 'joust' || m.chapter === 1 ? 1 : 4;
     while (this.w.players.filter((p) => p.team === 0).length < party) {
       const n = this.w.players.filter((p) => p.team === 0).length;
       this.w.players.push(
@@ -192,7 +207,13 @@ export class CampaignRoom extends Room {
     }
     if (this.events.length > 5000) this.events.splice(0, this.events.length - 5000);
     if (this.w.finished) void this.settle();
-    if (this.w.tick % 2 === 0 || this.w.finished) this.broadcast('snapshot', this.w);
+    if (this.w.tick % 2 === 0 || this.w.finished) {
+      this.broadcast('snapshot', this.w);
+      publishSnapshot(this.roomId, this.w);
+    }
+  }
+  onDispose() {
+    unregisterLive(this.roomId);
   }
   async settle() {
     if (this.saving || this.recorded) return;
@@ -202,6 +223,15 @@ export class CampaignRoom extends Room {
       await recordResult(this.roomId, { ...this.w, events: this.events }, this.started);
       this.recorded = true;
       this.broadcast('result', { matchId: this.roomId, saved: true });
+      for (const id of new Set(this.ids.values()))
+        void notify(
+          id,
+          'result',
+          this.w.players.find((p) => p.id === id)?.team === this.w.winner
+            ? 'Mission cleared and saved to your chronicle.'
+            : 'Mission attempt saved. Try again from your journey.',
+          { matchId: this.roomId },
+        ).catch(() => {});
       this.clock.setTimeout(() => {
         void this.disconnect();
       }, 60000);

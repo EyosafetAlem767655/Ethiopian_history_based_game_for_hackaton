@@ -49,7 +49,11 @@ export function campaignControl(w: World, id: string, seq: number): Input {
   } else if (m.kind === 'oath') {
     target = w.players.find((q) => q.id === 'trainee') ?? { x: 600, y: 380 };
     if (enemy) combat(enemy);
-  } else if (m.kind === 'escort' || m.kind === 'courier') {
+  } else if (m.kind === 'outpost') {
+    // Guard the ford and intercept monsters that come near it.
+    target = c.markers[0];
+    if (enemy && Math.hypot(enemy.x - target.x, enemy.y - target.y) < 420) combat(enemy);
+  } else if (m.kind === 'escort') {
     const captive = c.markers.find((a) => a.kind === 'captive' && !a.done),
       bearer = w.players.find((q) => q.id === 'bearer');
     target = captive ?? bearer ?? target;

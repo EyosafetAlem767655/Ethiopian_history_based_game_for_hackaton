@@ -2,6 +2,18 @@ import React, { useEffect, useRef, useState } from 'react';
 import { api, connection, useUI, wakeServer } from './store';
 import { requestJSON } from './services/http';
 import { hostedAuth } from './hostedAuth';
+import { ageBand, birthISO } from '../../../packages/shared/src/customization';
+/** Eligibility suggested by the date read from the ID, before any reviewer is involved. */
+function eligibilityFor(birth: Birth) {
+  try {
+    const band = ageBand(birthISO(birth) ?? '');
+    return band
+      ? `Based on this date you are 18+ (age band ${band}) and eligible once a reviewer confirms it.`
+      : 'Based on this date you are under 18: adult matchmaking and perks are not available.';
+  } catch {
+    return '';
+  }
+}
 type Birth = { year: number; month: number; day: number; calendar: 'gregorian' | 'ethiopian' };
 function DateFields({ value, onChange }: { value: Birth; onChange: (v: Birth) => void }) {
   return (
@@ -38,16 +50,57 @@ export function AgePanel({ onSignIn }: { onSignIn?: () => void } = {}) {
     [file, setFile] = useState<Blob | null>(null),
     [message, setMessage] = useState(''),
     [busy, setBusy] = useState(false);
+  const [stream, setStream] = useState<MediaStream | null>(null);
   const worker = useRef<any>(null),
-    alive = useRef(true);
+    alive = useRef(true),
+    video = useRef<HTMLVideoElement>(null),
+    live = useRef<MediaStream | null>(null);
   const refresh = async () => setStatus(await api('/age-review'));
+  function stopCamera() {
+    live.current?.getTracks().forEach((t) => t.stop());
+    live.current = null;
+    setStream(null);
+  }
   useEffect(() => {
     void refresh().catch((e) => setMessage(e.message));
     return () => {
       alive.current = false;
+      live.current?.getTracks().forEach((t) => t.stop());
       void worker.current?.terminate();
     };
   }, []);
+  useEffect(() => {
+    if (video.current && stream) {
+      video.current.srcObject = stream;
+      void video.current.play();
+    }
+  }, [stream]);
+  async function startCamera() {
+    setMessage('');
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        // Prefer the rear camera on phones; ID text needs resolution.
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
+        audio: false,
+      });
+      if (!alive.current) return s.getTracks().forEach((t) => t.stop());
+      live.current = s;
+      setStream(s);
+    } catch {
+      setMessage('Camera unavailable. Choose a photo of your ID instead.');
+    }
+  }
+  async function captureId() {
+    const v = video.current;
+    if (!v?.videoWidth) return;
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    c.getContext('2d')!.drawImage(v, 0, 0);
+    stopCamera();
+    const blob = await new Promise<Blob | null>((ok) => c.toBlob(ok, 'image/jpeg', 0.92));
+    if (blob) await select(new File([blob], 'fayda-scan.jpg', { type: 'image/jpeg' }));
+  }
   async function select(f: File | undefined) {
     if (!f) return;
     setMessage('');
@@ -163,8 +216,12 @@ export function AgePanel({ onSignIn }: { onSignIn?: () => void } = {}) {
   }
   return (
     <section className="personal-panel">
-      <span className="eyebrow">OPTIONAL HUMAN PLAY ACCESS</span>
-      <h2>Adult matchmaking</h2>
+      <span className="eyebrow">OPTIONAL · ADULT MATCHMAKING</span>
+      <h2>Verify your identity</h2>
+      <p>
+        Guests already play other guests. Scanning your Fayda national ID lets a reviewer confirm
+        your age so you can join adult matchmaking in your age band.
+      </p>
       <p>
         {status?.label ?? 'Loading review status…'}{' '}
         {status?.band && (
@@ -180,14 +237,7 @@ export function AgePanel({ onSignIn }: { onSignIn?: () => void } = {}) {
       <p>
         Status: <strong>{status?.status ?? 'loading'}</strong>
       </p>
-      {!status?.enabled && <p>Document review setup is pending. Do not upload an ID yet.</p>}
-      {status?.enabled && !canSubmit && (
-        <p>
-          Sign in to a normal Supabase account before selecting a Fayda image.{' '}
-          <button onClick={onSignIn}>Account sign-in</button>
-        </p>
-      )}
-      {status?.enabled && canSubmit && !['approved', 'pending'].includes(status.status) && (
+      {status && !['approved', 'pending'].includes(status.status) && (
         <>
           <label>
             <input
@@ -199,8 +249,30 @@ export function AgePanel({ onSignIn }: { onSignIn?: () => void } = {}) {
             decision or withdrawal; unreviewed requests expire after 24 hours. Only my approved
             birth date and review record are retained privately for age-band calculation.
           </label>
+          <div className="panel-actions">
+            <button disabled={!consent || busy || !!stream} onClick={() => void startCamera()}>
+              Scan ID with camera
+            </button>
+            {stream && (
+              <>
+                <button className="gold-btn" onClick={() => void captureId()}>
+                  Capture ID
+                </button>
+                <button onClick={stopCamera}>Cancel</button>
+              </>
+            )}
+          </div>
+          {stream && (
+            <video
+              ref={video}
+              muted
+              playsInline
+              className="selfie-preview"
+              aria-label="Camera preview: hold your Fayda card flat and fill the frame"
+            />
+          )}
           <label>
-            Fayda image (JPEG, PNG or WebP, maximum 5 MB)
+            Or choose a Fayda image (JPEG, PNG or WebP, maximum 5 MB)
             <input
               type="file"
               accept="image/jpeg,image/png,image/webp"
@@ -208,10 +280,24 @@ export function AgePanel({ onSignIn }: { onSignIn?: () => void } = {}) {
               onChange={(e) => void select(e.target.files?.[0])}
             />
           </label>
+          {file && <p>ID image ready. Check the date below, then submit.</p>}
           <DateFields value={birth} onChange={setBirth} />
-          <button disabled={!file || !consent || busy} onClick={() => void submit()}>
-            Submit for manual review
-          </button>
+          {file && <p className="eligibility-hint">{eligibilityFor(birth)}</p>}
+          {!canSubmit ? (
+            <p>
+              To submit, sign in with your email account (Story Demo and local guest profiles cannot
+              be reviewed). <button onClick={onSignIn}>Sign in to submit</button>
+            </p>
+          ) : !status.enabled ? (
+            <p>
+              Document review setup is pending on the server, so your ID cannot be sent yet. Your
+              scan stays on this device.
+            </p>
+          ) : (
+            <button disabled={!file || !consent || busy} onClick={() => void submit()}>
+              Submit for manual review
+            </button>
+          )}
         </>
       )}
       {status && ['approved', 'pending'].includes(status.status) && (

@@ -93,7 +93,10 @@ it('shares an authoritative mission, rejects claims/versions/outsiders, reconnec
   await until(() => !!w && w.tick > 2);
   expect(w!.protocol).toBe(2);
   expect(w!.players.filter((p) => !p.bot)).toHaveLength(2);
-  expect(new Set(w!.players.filter((p) => p.kind === 'warrior').map((p) => p.role)).size).toBe(4);
+  // Chapter I has no AI companions: only the two humans fight, each with a distinct role.
+  const warriors = w!.players.filter((p) => p.kind === 'warrior');
+  expect(warriors.every((p) => !p.bot)).toBe(true);
+  expect(new Set(warriors.map((p) => p.role)).size).toBe(2);
   const p = w!.players.find((p) => p.id === a.profile.id)!;
   const old = p.seq;
   r1.send('input', {

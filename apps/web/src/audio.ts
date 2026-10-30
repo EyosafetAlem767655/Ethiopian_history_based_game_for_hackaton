@@ -1,4 +1,126 @@
 import { useUI } from './store';
+// Ethiopian pentatonic modes (semitones above the root): Tizita minor and the darker Anchihoye.
+const TIZITA_MINOR = [0, 2, 3, 7, 8],
+  ANCHIHOYE = [0, 1, 5, 6, 9];
+/** Semitone offset of scale degree n (five degrees per octave; negatives go below the root). */
+function degree(mode: number[], n: number) {
+  const octave = Math.floor(n / 5);
+  return mode[n - octave * 5] + 12 * octave;
+}
+const _ = null;
+type Score = {
+  bpm: number;
+  root: number;
+  mode: number[];
+  /** Bar-by-bar chord roots in semitones. */
+  chords: number[];
+  /** Sixteen drum steps; 1 is a stroke, 1.5 an accented downbeat. */
+  drum: number[];
+  /** Melody scale degrees per sixteenth step (null rests), looping across bars. */
+  melody: (number | null)[];
+};
+const SCORES: Record<'menu' | 'exploration' | 'combat' | 'boss', Score> = {
+  // Slow and majestic: a processional with long horn swells.
+  menu: {
+    bpm: 62,
+    root: 130.81,
+    mode: TIZITA_MINOR,
+    chords: [0, -4, 3, -5],
+    drum: [1.5, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0],
+    melody: [
+      5,
+      _,
+      _,
+      _,
+      7,
+      _,
+      6,
+      _,
+      8,
+      _,
+      _,
+      _,
+      7,
+      _,
+      _,
+      _,
+      9,
+      _,
+      8,
+      _,
+      7,
+      _,
+      _,
+      _,
+      6,
+      _,
+      5,
+      _,
+      _,
+      _,
+      _,
+      _,
+    ],
+  },
+  exploration: {
+    bpm: 80,
+    root: 130.81,
+    mode: TIZITA_MINOR,
+    chords: [0, 3, -4, -2],
+    drum: [1.5, 0, 0, 1, 0, 0, 1, 0, 1.5, 0, 0, 1, 0, 1, 0, 0],
+    melody: [
+      5,
+      _,
+      7,
+      _,
+      8,
+      _,
+      7,
+      6,
+      5,
+      _,
+      _,
+      _,
+      6,
+      7,
+      _,
+      _,
+      8,
+      _,
+      9,
+      _,
+      10,
+      _,
+      9,
+      8,
+      7,
+      _,
+      6,
+      _,
+      5,
+      _,
+      _,
+      _,
+    ],
+  },
+  // Driving war drums under a clipped krar ostinato.
+  combat: {
+    bpm: 104,
+    root: 130.81,
+    mode: TIZITA_MINOR,
+    chords: [0, 0, -4, -2],
+    drum: [1.5, 0, 1, 0, 1, 0, 1, 1, 1.5, 0, 1, 0, 1, 1, 1, 0],
+    melody: [5, _, 5, 7, _, 8, 7, _, 5, _, 6, _, 7, _, 3, _],
+  },
+  boss: {
+    bpm: 116,
+    root: 98,
+    mode: ANCHIHOYE,
+    chords: [0, 1, 0, -2],
+    drum: [1.5, 0, 1, 1, 1.5, 0, 1, 0, 1.5, 0, 1, 1, 1.5, 1, 1, 1],
+    melody: [5, 6, _, 5, 7, _, 6, 5, 8, _, 7, 6, 5, _, 6, _],
+  },
+};
 class BattleAudio {
   context: AudioContext | null = null;
   musicGain: GainNode | null = null;
@@ -35,49 +157,126 @@ class BattleAudio {
   setTheme(theme: typeof this.theme) {
     this.theme = theme;
   }
+  noise: AudioBuffer | null = null;
+  /**
+   * Original generated score: kebero war drums, a horn drone, a choir-like pad and a krar-style
+   * plucked melody in Ethiopian modes. Sixteen steps per bar; tempo and density rise from the
+   * majestic menu theme to the boss. No recordings, paid APIs or runtime downloads.
+   */
   scheduleMusic() {
     const ctx = this.context;
     if (!ctx || ctx.state !== 'running' || document.hidden) return;
     this.nextNote = Math.max(this.nextNote, ctx.currentTime);
     while (this.nextNote < ctx.currentTime + 0.3) {
-      // Original slow modal composition. No recordings, paid APIs or runtime downloads.
-      const patterns = {
-        menu: [0, 7, 10, 5, 0, 12, 7, 3],
-        exploration: [0, 5, 7, 10, 12, 7, 5, 3],
-        combat: [0, 3, 7, 5, 0, 7, 10, 5],
-        boss: [0, 1, 7, 3, 0, 10, 7, 1],
-      };
-      const semitone = patterns[this.theme][this.note++ % 8],
-        root = this.theme === 'boss' ? 98 : 130.8128;
-      for (const [interval, amplitude] of [
-        [0, 0.025],
-        [12, 0.012],
-        [19, 0.007],
-      ]) {
-        const o = ctx.createOscillator(),
-          g = ctx.createGain(),
-          filter = ctx.createBiquadFilter();
-        o.type = 'sine';
-        o.frequency.value = root * 2 ** ((semitone + interval) / 12);
-        filter.type = 'lowpass';
-        filter.frequency.value = 1100;
-        const at = this.nextNote;
-        g.gain.setValueAtTime(0, at);
-        g.gain.linearRampToValueAtTime(amplitude, at + 0.7);
-        g.gain.exponentialRampToValueAtTime(0.0001, at + 5.5);
-        o.connect(filter);
-        filter.connect(g);
-        g.connect(this.musicGain!);
-        o.start(at);
-        o.stop(at + 5.7);
-        o.onended = () => {
-          o.disconnect();
-          filter.disconnect();
-          g.disconnect();
-        };
+      const score = SCORES[this.theme],
+        step = this.note++ % 16,
+        bar = Math.floor(this.note / 16) % score.chords.length,
+        at = this.nextNote,
+        beat = 60 / score.bpm,
+        root = score.root * 2 ** (score.chords[bar] / 12);
+      if (score.drum[step]) this.drum(at, score.drum[step]);
+      if (step === 0) {
+        this.horn(at, root / 2, beat * 4);
+        this.choir(at, root, score.mode, beat * 4.2);
       }
-      this.nextNote += this.theme === 'combat' || this.theme === 'boss' ? 1.65 : 2.4;
+      const note = score.melody[(bar * 16 + step) % score.melody.length];
+      if (note !== null) this.pluck(at, score.root * 2 ** (degree(score.mode, note) / 12));
+      this.nextNote += beat / 4;
     }
+  }
+  /** A voice routed through its own gain envelope into the music bus, cleaned up when done. */
+  voice(type: OscillatorType, frequency: number, at: number, length: number, cutoff = 1800) {
+    const ctx = this.context!,
+      o = ctx.createOscillator(),
+      g = ctx.createGain(),
+      filter = ctx.createBiquadFilter();
+    o.type = type;
+    o.frequency.setValueAtTime(frequency, at);
+    filter.type = 'lowpass';
+    filter.frequency.value = cutoff;
+    o.connect(filter);
+    filter.connect(g);
+    g.connect(this.musicGain!);
+    g.gain.setValueAtTime(0, at);
+    o.start(at);
+    o.stop(at + length + 0.1);
+    o.onended = () => {
+      o.disconnect();
+      filter.disconnect();
+      g.disconnect();
+    };
+    return { o, g, filter };
+  }
+  /** Kebero: a deep pitch-dropping drum body with a short skin slap. */
+  drum(at: number, strength: number) {
+    const ctx = this.context!;
+    const { o, g } = this.voice('sine', 120, at, 0.55, 900);
+    o.frequency.exponentialRampToValueAtTime(42, at + 0.32);
+    g.gain.linearRampToValueAtTime(0.11 * strength, at + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.5);
+    this.noise ??= (() => {
+      const buffer = ctx.createBuffer(1, ctx.sampleRate * 0.2, ctx.sampleRate),
+        data = buffer.getChannelData(0);
+      for (let n = 0; n < data.length; n++) data[n] = Math.random() * 2 - 1;
+      return buffer;
+    })();
+    const slap = ctx.createBufferSource(),
+      band = ctx.createBiquadFilter(),
+      sg = ctx.createGain();
+    slap.buffer = this.noise;
+    band.type = 'bandpass';
+    band.frequency.value = strength > 1 ? 220 : 380;
+    sg.gain.setValueAtTime(0.05 * strength, at);
+    sg.gain.exponentialRampToValueAtTime(0.0001, at + 0.12);
+    slap.connect(band);
+    band.connect(sg);
+    sg.connect(this.musicGain!);
+    slap.start(at);
+    slap.stop(at + 0.15);
+    slap.onended = () => {
+      slap.disconnect();
+      band.disconnect();
+      sg.disconnect();
+    };
+  }
+  /** Low horn drone (root and fifth) that swells across the bar. */
+  horn(at: number, frequency: number, length: number) {
+    for (const [ratio, level] of [
+      [1, 0.03],
+      [1.5, 0.018],
+    ]) {
+      const { g, filter } = this.voice('sawtooth', frequency * ratio, at, length, 380);
+      filter.frequency.linearRampToValueAtTime(700, at + length * 0.5);
+      g.gain.linearRampToValueAtTime(level, at + length * 0.4);
+      g.gain.linearRampToValueAtTime(0.0001, at + length);
+    }
+  }
+  /** Choir-like pad: detuned voices on the mode's root, third and fifth with slow vibrato. */
+  choir(at: number, frequency: number, mode: number[], length: number) {
+    for (const [n, detune] of [
+      [0, -6],
+      [2, 5],
+      [4, -3],
+      [7, 4],
+    ]) {
+      const { o, g } = this.voice(
+        'triangle',
+        frequency * 2 ** (degree(mode, n) / 12),
+        at,
+        length,
+        1400,
+      );
+      o.detune.value = detune;
+      g.gain.linearRampToValueAtTime(0.012, at + length * 0.35);
+      g.gain.linearRampToValueAtTime(0.0001, at + length);
+    }
+  }
+  /** Krar/begena-style pluck: bright attack, fast decay, closing filter. */
+  pluck(at: number, frequency: number) {
+    const { g, filter } = this.voice('square', frequency, at, 0.9, 2600);
+    filter.frequency.exponentialRampToValueAtTime(500, at + 0.4);
+    g.gain.linearRampToValueAtTime(0.022, at + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 0.85);
   }
   unlock() {
     try {

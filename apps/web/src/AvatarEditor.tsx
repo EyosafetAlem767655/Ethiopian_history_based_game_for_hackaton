@@ -205,7 +205,62 @@ export function AvatarEditor() {
           Save avatar
         </button>
       </div>
+      <ArmorPicker onMessage={setMessage} />
       <p role="status">{message}</p>
     </section>
+  );
+}
+/** Cosmetic armor sets. Royal Feast unlocks from the lunch gathering perk. */
+function ArmorPicker({ onMessage }: { onMessage: (m: string) => void }) {
+  const progress = useUI((s) => s.me?.profile?.progress),
+    owned: string[] = progress?.armor ?? [],
+    reserved: string[] = progress?.armorPending ?? [],
+    equipped = progress?.equipped ?? 'standard';
+  async function equip(armor: string) {
+    try {
+      const out = await api('/armor', { armor }, 'PUT');
+      const me = useUI.getState().me;
+      useUI.setState({ me: { ...me, profile: { ...me.profile, progress: out.progress } } });
+      onMessage(armor === 'standard' ? 'Standard armor equipped.' : 'Royal Feast armor equipped.');
+    } catch (e) {
+      onMessage((e as Error).message);
+    }
+  }
+  const sets: [string, string, string][] = [
+    ['standard', 'Warrior armor', 'Your hero’s battle-worn kit.'],
+    [
+      'royal-feast',
+      'Royal Feast armor',
+      'Gilded gold and emerald. Unlocked by the lunch gathering.',
+    ],
+  ];
+  return (
+    <div className="armor-picker">
+      <h3>Armor</h3>
+      <div>
+        {sets.map(([id, name, note]) => {
+          const locked = id !== 'standard' && !owned.includes(id);
+          return (
+            <button
+              key={id}
+              className={'armor-option armor-' + id + (equipped === id ? ' equipped' : '')}
+              disabled={locked}
+              aria-pressed={equipped === id}
+              onClick={() => void equip(id)}
+            >
+              <b>{name}</b>
+              <small>
+                {!locked
+                  ? note
+                  : reserved.includes(id)
+                    ? '🔒 Reserved for you: verify your identity to claim'
+                    : '🔒 Join the Royal Lunch Perk (verified accounts) to unlock'}
+              </small>
+              {equipped === id && <em>EQUIPPED</em>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

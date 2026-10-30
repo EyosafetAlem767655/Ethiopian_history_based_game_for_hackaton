@@ -1,5 +1,5 @@
 import { assertHumanBand, readAvatar } from './customization';
-import { ageBands } from '../../../packages/shared/src/customization';
+import { isMatchPool } from '../../../packages/shared/src/customization';
 import { Room, type Client } from '@colyseus/core';
 import {
   fighter,
@@ -12,9 +12,17 @@ import {
   type Mode,
   type GameEvent,
 } from '../../../packages/shared/src/game';
-import { authenticate, recordResult, saveProfile, db, type Profile } from './store';
+import { authenticate, recordResult, saveProfile, db, equippedArmor, type Profile } from './store';
 import { z } from 'zod';
 import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
+import { publishSnapshot, registerLive, unregisterLive } from './live';
+import { notify } from './notify';
+import { reportTournamentMatch, tournamentSeat, type MatchKey } from './tournament';
+const MODE_LABELS: Record<string, string> = {
+  duel: '1v1 Duel',
+  squad: '4v4 Banner Conquest',
+  quest: 'Royal Quest',
+};
 export class BattleRoom extends Room {
   maxClients = 8;
   maxMessagesPerSecond = 80;
@@ -30,11 +38,21 @@ export class BattleRoom extends Room {
   roleOrders = [shuffledRoles(), shuffledRoles()];
   eventLog: GameEvent[] = [];
   loggedEvents = new Set<string>();
-  onCreate(o: { ageBand?: string; mode?: Mode; demo?: boolean; squadId?: string }) {
+  /** Seconds to wait for players before AI fills empty seats. */
+  waitFor = 5;
+  tournament?: { id: string; key: MatchKey };
+  onCreate(o: {
+    ageBand?: string;
+    mode?: Mode;
+    demo?: boolean;
+    squadId?: string;
+    tournamentId?: string;
+    matchKey?: MatchKey;
+  }) {
     const mode = z.enum(['tutorial', 'duel', 'squad', 'quest']).parse(o.mode ?? 'duel');
     this.maxClients = mode === 'duel' ? 2 : mode === 'tutorial' ? 1 : mode === 'squad' ? 8 : 4;
     this.w = world(mode, !!o.demo);
-    if (!ageBands.includes(o.ageBand as any)) {
+    if (!isMatchPool(o.ageBand)) {
       this.maxClients = 1;
       void this.setPrivate(true);
     }
@@ -45,6 +63,17 @@ export class BattleRoom extends Room {
       squadId: o.squadId ?? '',
       ageBand: o.ageBand ?? 'solo',
     });
+    if (mode === 'duel' && o.tournamentId && o.matchKey)
+      this.tournament = { id: o.tournamentId, key: o.matchKey };
+    if (mode !== 'tutorial')
+      registerLive(this.roomId, {
+        label: this.tournament
+          ? 'Tournament ' + (o.matchKey === 'final' ? 'final' : 'semifinal')
+          : MODE_LABELS[mode],
+        demo: !!o.demo,
+        started: Date.now(),
+        world: () => this.w,
+      });
     this.onMessage('input', (c, data) => {
       const result = inputSchema.safeParse(data);
       if (!result.success) return;
@@ -54,7 +83,7 @@ export class BattleRoom extends Room {
       this.inputs.set(id, result.data);
     });
     this.onMessage('chat', (c, data) => {
-      if (this.elapsed > 5 || typeof data !== 'string' || data.length > 200) return;
+      if (this.elapsed > this.waitFor || typeof data !== 'string' || data.length > 200) return;
       const now = Date.now();
       const last =
         (
@@ -96,12 +125,19 @@ export class BattleRoom extends Room {
     const avatar = await readAvatar(p.id);
     Object.assign(p, { avatar });
     if (this.w.finished) throw Error('Match already completed');
-    if (this.elapsed > 5 && this.w.mode !== 'quest') throw Error('Match already started');
+    if (this.elapsed > this.waitFor && this.w.mode !== 'quest')
+      throw Error('Match already started');
+    if (this.tournament) {
+      const seat = await tournamentSeat(this.tournament.id, this.tournament.key, p.id);
+      // Give a human opponent time to arrive before an AI takes their seat.
+      if (seat.humanOpponent) this.waitFor = 30;
+    }
     if (this.w.mode === 'tutorial' && this.w.players.length > 0)
       throw Error('Training is a private session');
     if (Boolean(p.demo) !== !!this.metadata.demo) throw Error('Mode mismatch');
     if (this.w.players.some((f) => f.id === p.id)) throw Error('Already in this match');
-    if (this.w.mode === 'duel' && !p.progress.tutorial) throw Error('Complete training first');
+    if (this.w.mode === 'duel' && !p.progress.tutorial && !this.tournament)
+      throw Error('Complete training first');
     if (this.w.mode === 'squad' && p.progress.stage < 2) throw Error('Stage 2 is locked');
     if (this.w.mode === 'quest' && p.progress.stage < 3) throw Error('Stage 3 is locked');
     if (['squad', 'quest'].includes(this.w.mode)) {
@@ -130,7 +166,8 @@ export class BattleRoom extends Room {
     auth: Profile,
   ) {
     const p = auth ?? (c.auth as Profile);
-    if (this.elapsed > 5 && this.w.mode !== 'quest') throw Error('Match already started');
+    if (this.elapsed > this.waitFor && this.w.mode !== 'quest')
+      throw Error('Match already started');
     this.joinIds.set(c.sessionId, p.id);
     p.hero = Math.max(0, Math.min(3, Number(o.hero) || 0));
     await db.prepare('UPDATE profiles SET hero=? WHERE id=?').run(p.hero, p.id);
@@ -159,6 +196,7 @@ export class BattleRoom extends Room {
       f.hp = replacement.hp;
     }
     f.avatar = p.avatar;
+    f.armor = equippedArmor(p);
     this.w.players.push(f);
     c.send('identity', { id: p.id, room: this.roomId });
     c.send('snapshot', this.w);
@@ -191,8 +229,11 @@ export class BattleRoom extends Room {
     }
     if (this.recorded) return;
     this.elapsed += 1 / 30;
-    if (this.elapsed < 5 && this.w.mode !== 'tutorial') {
-      this.broadcast('waiting', { seconds: Math.ceil(5 - this.elapsed) });
+    // Both tournament entrants are here: no need to keep waiting.
+    if (this.tournament && this.w.players.length >= 2)
+      this.elapsed = Math.max(this.elapsed, this.waitFor);
+    if (this.elapsed < this.waitFor && this.w.mode !== 'tutorial') {
+      this.broadcast('waiting', { seconds: Math.ceil(this.waitFor - this.elapsed) });
       return;
     }
     if (!this.locked && this.w.mode !== 'quest') void this.lock();
@@ -254,7 +295,25 @@ export class BattleRoom extends Room {
     if (this.eventLog.length > 5000) this.eventLog.splice(0, this.eventLog.length - 5000);
     for (const p of training) p.bot = true;
     if (this.w.finished) void this.settle();
-    if (this.w.tick % 2 === 0 || this.w.finished) this.broadcast('snapshot', this.w);
+    if (this.w.tick % 2 === 0 || this.w.finished) {
+      this.broadcast('snapshot', this.w);
+      publishSnapshot(this.roomId, this.w);
+    }
+  }
+  onDispose() {
+    unregisterLive(this.roomId);
+  }
+  /** The tournament entrant who won: the winning human, otherwise the absent or AI opponent. */
+  async tournamentWinner() {
+    const t = this.tournament!;
+    const human = this.w.players.find((p) => !p.id.startsWith('bot'));
+    const seat = await tournamentSeat(t.id, t.key, human?.id ?? '').catch(() => null);
+    if (!seat) return;
+    const entrants = [seat.match.a!, seat.match.b!];
+    const winner = this.w.players.find((p) => p.team === this.w.winner && entrants.includes(p.id));
+    if (winner) return winner.id;
+    const present = this.w.players.map((p) => p.id);
+    return entrants.find((id) => !present.includes(id)) ?? entrants[0];
   }
   async settle() {
     if (this.saving || this.recorded) return;
@@ -264,6 +323,18 @@ export class BattleRoom extends Room {
       await recordResult(this.roomId, { ...this.w, events: this.eventLog }, this.started);
       this.recorded = true;
       this.broadcast('result', { matchId: this.roomId, saved: true });
+      if (this.w.mode !== 'tutorial')
+        for (const f of this.w.players.filter((p) => !p.id.startsWith('bot')))
+          void notify(
+            f.id,
+            'result',
+            `${f.team === this.w.winner ? 'Victory' : 'Defeat'} saved: ${MODE_LABELS[this.w.mode] ?? 'match'} result hashed for your chronicle.`,
+            { matchId: this.roomId },
+          ).catch(() => {});
+      if (this.tournament) {
+        const winner = await this.tournamentWinner();
+        if (winner) await reportTournamentMatch(this.tournament.id, this.tournament.key, winner);
+      }
       this.clock.setTimeout(() => {
         void this.disconnect();
       }, 60000);

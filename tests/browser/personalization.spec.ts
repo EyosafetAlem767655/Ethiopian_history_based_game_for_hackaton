@@ -35,7 +35,7 @@ test('reads a synthetic birth date with local OCR and submits only after consent
   await page.getByLabel('WARRIOR NAME').fill('OCR Fixture');
   await page.getByRole('button', { name: 'BEGIN NORMAL PROGRESSION' }).click();
   await expect(page.getByRole('heading', { name: 'Choose your warrior.' })).toBeVisible();
-  await page.getByRole('button', { name: 'Adult matchmaking' }).click();
+  await page.getByRole('button', { name: 'Verify identity' }).click();
   const input = page.locator('input[type=file]');
   await expect(input).toBeDisabled();
   await page.getByRole('checkbox').check();
@@ -148,12 +148,11 @@ test('persists editable avatars, offers manual camera fallback and explains priv
   await page.reload();
   await page.getByRole('button', { name: 'Your likeness' }).click();
   await expect(page.getByLabel('Avatar hair')).toHaveValue('braids');
-  await page.getByRole('button', { name: 'Adult matchmaking' }).click();
-  await expect(page.getByRole('heading', { name: 'Adult matchmaking' })).toBeVisible();
-  await expect(
-    page.getByText('Document review setup is pending. Do not upload an ID yet.'),
-  ).toBeVisible();
-  await expect(page.locator('input[type=file]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Verify identity' }).click();
+  await expect(page.getByRole('heading', { name: 'Verify your identity' })).toBeVisible();
+  // The panel always asks for the Fayda ID; sending it waits for sign-in and reviewer setup.
+  await expect(page.getByRole('button', { name: 'Scan ID with camera' })).toBeVisible();
+  await expect(page.locator('input[type=file]')).toHaveCount(1);
   await page.getByRole('button', { name: 'Your legacy' }).click();
   await page.getByRole('slider', { name: 'Menu music volume' }).fill('0.15');
   expect(await page.evaluate(() => localStorage.getItem('kibre-music-volume'))).toBe('0.15');

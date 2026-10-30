@@ -35,7 +35,8 @@ export async function drive(page: Page, until: (w: World) => boolean = (w) => w.
         console.log('Browser phase:', lastPhase);
       }
       const p = w.players.find((p) => p.id === state.id);
-      if (!p || w.players.length < 2) {
+      // Wait for the match clock: Chapter I missions can be solo with no other fighter.
+      if (!p || !w.tick) {
         await page.waitForTimeout(100);
         continue;
       }
@@ -76,7 +77,12 @@ export async function drive(page: Page, until: (w: World) => boolean = (w) => w.
           held.delete(key);
         }
       }
-      const aim = project(p.x + Math.cos(i.aim) * 120, p.y + Math.sin(i.aim) * 120),
+      // The arena reads the cursor at body height (higher for riders), so aim there too.
+      const aim = project(
+          p.x + Math.cos(i.aim) * 120,
+          p.y + Math.sin(i.aim) * 120,
+          p.mount ? 60 : 30,
+        ),
         zoom = Number(state.canvas.zoom);
       await page.mouse.move(
         box.x + (aim.x - Number(state.canvas.scrollX) - box.width / 2) * zoom + box.width / 2,

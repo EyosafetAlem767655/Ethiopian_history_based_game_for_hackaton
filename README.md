@@ -88,4 +88,4 @@ Read [architecture](docs/ARCHITECTURE.md), [demo walkthrough and three-minute pr
 
 See [actual validation results](docs/VALIDATION.md) for the executed tests, browser journey and final 20-client measurement.
 
-The Royal Lunch Pass is a prototype collectible. It is **not redeemable at Burger King**, contains no fabricated coupon code, and implies no commercial partnership. Genuine gathering approval is social account attestation; it does not use facial recognition or prove physical location.
+The Royal Lunch Perk is a **prototype offer**: when a four-warrior squad meets for lunch and submits a consented group selfie, the perk promises 40% of the lunch covered (Chanoly noodles for now) and unlocks the Royal Feast armor for every member. Terms apply; the game does not issue coupon codes or process payments, and players who decline simply keep playing. Genuine gathering approval is social account attestation; it does not use facial recognition or prove physical location.

@@ -32,6 +32,8 @@ export function shuffledRoles(random: () => number = Math.random): Role[] {
 }
 export interface Fighter {
   avatar?: AvatarSpec;
+  /** Unlocked cosmetic armor set, e.g. 'royal-feast' from the lunch gathering perk. */
+  armor?: string;
   mount?: { heading: number; speed: number; gait: number };
   kind?: 'warrior' | 'hyena' | 'caster' | 'warden' | 'civilian';
   honor?: number;
@@ -91,6 +93,8 @@ export interface World {
   protocol: number;
   geometry?: Geometry;
   wind?: { x: number; y: number };
+  /** Campaign multiplier for monster damage, from 0.6 (first mission) to 1 (last). */
+  monsterDamage?: number;
   campaign?: CampaignState;
   mode: Mode;
   demo: boolean;
@@ -389,6 +393,9 @@ export function damage(w: World, p: Fighter, t: Fighter, amount: number) {
     t.stamina = Math.max(0, t.stamina - 15);
     amount = 3;
   }
+  // Campaign monsters hit softer in early missions (see campaign difficulty ramp).
+  if (p.kind && p.kind !== 'warrior' && p.kind !== 'civilian' && w.monsterDamage)
+    amount = Math.max(1, Math.round(amount * w.monsterDamage));
   t.hp = Math.max(0, t.hp - amount);
   p.damage += amount;
   p.contribution += amount;
@@ -796,6 +803,11 @@ export interface Progress {
   squadRating: number;
   squadWins: number;
   tutorial: boolean;
+  /** Owned cosmetic armor sets and the one worn in battle. */
+  armor?: string[];
+  equipped?: string;
+  /** Rewards earned before identity verification, granted once the review is approved. */
+  armorPending?: string[];
 }
 export const freshProgress = (): Progress => ({
   wins: 0,
