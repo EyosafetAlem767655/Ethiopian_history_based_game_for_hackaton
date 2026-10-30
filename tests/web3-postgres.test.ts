@@ -55,14 +55,14 @@ it('runs wallet linking, identity snapshots and private chat through the Postgre
       '003_runtime',
       '004_evidence_cleanup',
       '005_team_chat',
-      '006_social',
+      '009_social',
     ]) {
       const sql = readFileSync('supabase/migrations/' + name + '.sql', 'utf8').replace(
         'create extension if not exists pgcrypto;',
         '',
       );
       await pg.exec(sql);
-      if (name === '005_team_chat' || name === '006_social') await pg.exec(sql); // Additive upgrades can be retried.
+      if (name === '005_team_chat' || name === '009_social') await pg.exec(sql); // Additive upgrades can be retried.
     }
     const store = await import('../apps/server/src/store');
     const wallet = await import('../apps/server/src/wallet');
