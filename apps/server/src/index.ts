@@ -24,7 +24,8 @@ import {
   walletIdentity,
   WalletLinkError,
 } from './wallet';
-import { registerHostedRoutes, exchangeHosted, isHosted, syncHosted } from './hosted';
+import { registerHostedRoutes, exchangeHosted, isHosted, syncHosted, supabase } from './hosted';
+import { processMediaDeletions } from './media';
 import { BaseAttestation, processOutbox } from './attestation';
 import { BattleRoom } from './room';
 import { SquadLobby } from './lobby';
@@ -387,6 +388,12 @@ if (process.env.ALLOW_CHAIN_BROADCAST === 'true') {
 setInterval(() => {
   void syncHosted().catch((e) => console.error('Hosted sync:', e.message));
 }, 5000).unref();
+if (supabase)
+  setInterval(() => {
+    void processMediaDeletions(supabase!).catch((e: Error) =>
+      console.error('Private media cleanup:', e.name),
+    );
+  }, 30000).unref();
 const port = Number(process.env.PORT ?? 2567);
 await checkDatabase();
 await server.listen(port);

@@ -56,6 +56,7 @@ it('runs wallet linking, identity snapshots and private chat through the Postgre
       '004_evidence_cleanup',
       '005_team_chat',
       '006_session_revocation',
+      '008_private_media',
     ]) {
       const sql = readFileSync('supabase/migrations/' + name + '.sql', 'utf8').replace(
         'create extension if not exists pgcrypto;',

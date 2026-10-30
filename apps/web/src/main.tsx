@@ -1644,7 +1644,7 @@ function GatheringPanel({ squad, onVerified }: { squad: any; onVerified: () => P
                   className="gold-btn"
                   onClick={() =>
                     run(async () => {
-                      await api('/gathering/' + record.id + '/approve', { consent });
+                      await api('/gathering/' + record.id + '/approve', { consent, revision: record.revision });
                       await refresh();
                       await onVerified();
                     })
