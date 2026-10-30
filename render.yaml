@@ -39,3 +39,5 @@ services:
         value: 'true'
       - key: ALLOW_CHAIN_BROADCAST
         value: 'false'
+      - key: VITE_RECORDS_ADDRESS
+        sync: false

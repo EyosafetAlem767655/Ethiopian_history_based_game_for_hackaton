@@ -11,10 +11,12 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Server } from '@colyseus/core';
+import { GuardedGameServer } from './matchmaking';
 import { SharedGameTransport } from './transport';
-import { currentSquad, registerTeamChat } from './chat';
+import { currentSquad, registerTeamChat, notifyTeamMembershipChanged } from './chat';
 import { resultProof } from './result-proof';
+import { registerWeb3Routes, web3Inventory, processWeb3Jobs } from './web3';
+import { baseRewardsAdapter } from './chain-rewards';
 import { z } from 'zod';
 import type { Address, Hex } from 'viem';
 import {
@@ -24,7 +26,8 @@ import {
   walletIdentity,
   WalletLinkError,
 } from './wallet';
-import { registerHostedRoutes, exchangeHosted, isHosted, syncHosted } from './hosted';
+import { registerHostedRoutes, exchangeHosted, isHosted, syncHosted, supabase } from './hosted';
+import { processMediaDeletions } from './media';
 import { BaseAttestation, processOutbox } from './attestation';
 import { BattleRoom } from './room';
 import { SquadLobby } from './lobby';
@@ -34,6 +37,7 @@ import { MISSIONS, DEMO_MISSIONS } from '../../../packages/shared/src/missions';
 import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
 import {
   authenticate,
+  revokeSession,
   createProfile,
   token,
   profile,
@@ -52,6 +56,8 @@ app.set('trust proxy', 1);
 asyncRoutes(app);
 app.use((_q, r, next) => {
   r.setHeader('X-Request-ID', randomUUID());
+  r.setHeader('X-Content-Type-Options', 'nosniff');
+  if (_q.path.startsWith('/api/')) r.setHeader('Cache-Control', 'no-store');
   next();
 });
 app.use(
@@ -147,11 +153,16 @@ app.get('/api/me', async (_q, r) => {
     badges: await badges(p.id),
     history: await history(p.id),
     wallet: await walletIdentity(p.id),
+    web3: await web3Inventory(p.id),
     campaign: await campaignProgress(p.id),
     squad: await currentSquad(p.id, p.demo),
     avatar: await readAvatar(p.id),
     age: await eligibility(p.id),
   });
+});
+app.post('/api/session/logout', async (q, r) => {
+  await revokeSession(q.headers.authorization!.replace('Bearer ', ''));
+  r.json({ signedOut: true });
 });
 app.get('/api/results/:id/proof', async (q, r) => {
   const proof = await resultProof(q.params.id, r.locals.player.id);
@@ -160,6 +171,27 @@ app.get('/api/results/:id/proof', async (q, r) => {
     return;
   }
   r.json(proof);
+});
+app.post('/api/results/:id/retry', async (q, r) => {
+  const proof = await resultProof(q.params.id, r.locals.player.id);
+  if (!proof) {
+    r.status(404).json({ error: 'Result not found' });
+    return;
+  }
+  if (
+    process.env.ALLOW_CHAIN_BROADCAST !== 'true' ||
+    proof.simulated ||
+    proof.status !== 'failed'
+  ) {
+    r.status(409).json({ error: 'Only failed live testnet submissions can be retried' });
+    return;
+  }
+  await db
+    .prepare(
+      "UPDATE outbox SET attempts=0,status='pending',error=NULL WHERE match_id=? AND status='failed'",
+    )
+    .run(q.params.id);
+  r.json({ status: 'pending' });
 });
 app.post('/api/wallet/nonce', async (q, r) => {
   try {
@@ -189,6 +221,7 @@ app.post('/api/wallet/bind', async (q, r) => {
 });
 registerHostedRoutes(app);
 registerCustomization(app);
+registerWeb3Routes(app);
 app.get('/api/campaign', async (_q, r) => {
   const p = r.locals.player;
   r.json({ progress: await campaignProgress(p.id), missions: MISSIONS, demoOrder: DEMO_MISSIONS });
@@ -272,7 +305,10 @@ app.post('/api/squad', async (q, r) => {
       ),
     };
   })();
-  if (result) r.json(result);
+  if (result) {
+    notifyTeamMembershipChanged(r.locals.player.id);
+    r.json(result);
+  }
 });
 app.post('/api/gathering/demo', async (q, r) => {
   const p = (await profile(r.locals.player.id))!;
@@ -358,7 +394,8 @@ app.use((err: Error, _q: express.Request, r: express.Response, _n: express.NextF
   });
 });
 const http = createServer(app);
-const server = new Server({ transport: new SharedGameTransport(http) });
+http.requestTimeout = 15000;
+const server = new GuardedGameServer({ transport: new SharedGameTransport(http) });
 registerTeamChat(http);
 server.define('battle', BattleRoom).filterBy(['mode', 'demo', 'squadId', 'ageBand']);
 server.define('conquest', BattleRoom, { mode: 'squad' }).filterBy(['demo', 'ageBand']);
@@ -369,13 +406,23 @@ server
   .filterBy(['demo', 'missionId', 'squadId', 'protocol', 'ageBand']);
 if (process.env.ALLOW_CHAIN_BROADCAST === 'true') {
   const adapter = new BaseAttestation();
+  const rewards = baseRewardsAdapter();
   setInterval(() => {
-    void processOutbox(adapter);
+    void (async () => {
+      await processOutbox(adapter);
+      await processWeb3Jobs(rewards);
+    })().catch((e: Error) => console.error('Web3 worker:', e.name));
   }, 15000).unref();
 }
 setInterval(() => {
   void syncHosted().catch((e) => console.error('Hosted sync:', e.message));
 }, 5000).unref();
+if (supabase)
+  setInterval(() => {
+    void processMediaDeletions(supabase!).catch((e: Error) =>
+      console.error('Private media cleanup:', e.name),
+    );
+  }, 30000).unref();
 const port = Number(process.env.PORT ?? 2567);
 await checkDatabase();
 await server.listen(port);

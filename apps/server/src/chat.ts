@@ -2,7 +2,8 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { Server } from 'socket.io';
 import { z } from 'zod';
-import { authenticate, db, profile } from './store';
+import { authenticate, db, profile, sessionEvents, sessionFingerprint } from './store';
+import { EventEmitter } from 'node:events';
 import { persistence } from './database';
 import type {
   ChatClientEvents,
@@ -57,6 +58,11 @@ const normalizeMessage = (message: TeamMessage): TeamMessage => ({
   at: Number(message.at),
 });
 
+const membershipEvents = new EventEmitter();
+export function notifyTeamMembershipChanged(playerId: string) {
+  membershipEvents.emit('changed', playerId);
+}
+
 export function registerTeamChat(server: HttpServer) {
   const origins = (process.env.CORS_ORIGINS ?? 'http://localhost:5173')
     .split(',')
@@ -91,14 +97,39 @@ export function registerTeamChat(server: HttpServer) {
   const roomName = (squadId: string) => 'team:' + squadId;
   // Quote camelCase aliases: PostgreSQL otherwise returns `playerid`.
   const selectMessage = 'SELECT id,player_id AS "playerId",name,text,at FROM team_messages';
-  const jobs = new Map<string, Promise<void>>();
+  const jobs = new Map<string, { tail: Promise<void>; depth: number }>();
+  const connections = new Map<string, number>();
+  function releaseConnection(id: string) {
+    const remaining = (connections.get(id) ?? 1) - 1;
+    if (remaining > 0) connections.set(id, remaining);
+    else connections.delete(id);
+  }
+  const budgets = new Map<string, { tokens: number; at: number }>();
+  function budget(playerId: string) {
+    const now = Date.now(),
+      previous = budgets.get(playerId) ?? { tokens: 12, at: now };
+    previous.tokens = Math.min(12, previous.tokens + (now - previous.at) / 500);
+    previous.at = now;
+    if (previous.tokens < 1) {
+      budgets.set(playerId, previous);
+      return false;
+    }
+    previous.tokens--;
+    budgets.set(playerId, previous);
+    return true;
+  }
   function enqueue(squadId: string, job: () => Promise<void>) {
-    const next = (jobs.get(squadId) ?? Promise.resolve()).catch(() => {}).then(job);
-    jobs.set(squadId, next);
+    const queue = jobs.get(squadId) ?? { tail: Promise.resolve(), depth: 0 };
+    if (queue.depth >= 16) return Promise.reject(Error('Team chat is busy. Please retry.'));
+    queue.depth++;
+    const next = queue.tail.catch(() => {}).then(job);
+    queue.tail = next;
+    jobs.set(squadId, queue);
     void next
       .catch((e: Error) => console.error('Team chat:', e.message))
       .finally(() => {
-        if (jobs.get(squadId) === next) jobs.delete(squadId);
+        queue.depth--;
+        if (!queue.depth) jobs.delete(squadId);
       });
     return next;
   }
@@ -125,72 +156,126 @@ export function registerTeamChat(server: HttpServer) {
     }
   }
   async function presence(squadId: string, demo: number) {
-    const online = new Map<string, TeamMember>();
-    for (const socket of io.sockets.sockets.values()) {
-      if (socket.data.squadId !== squadId) continue;
-      online.set(socket.data.playerId, {
-        id: socket.data.playerId,
-        name: (await profile(socket.data.playerId))?.name ?? 'Warrior',
-      });
-    }
+    const members = (await squadRoster(squadId, demo)) ?? [];
+    const connected = new Set(
+      [...io.sockets.sockets.values()]
+        .filter((s) => s.data.squadId === squadId)
+        .map((s) => s.data.playerId),
+    );
     io.to(roomName(squadId)).emit('chat:members', {
-      members: (await squadRoster(squadId, demo)) ?? [],
-      online: [...online.values()],
+      members,
+      online: members.filter((p) => connected.has(p.id)),
     });
   }
+  function refresh(squadId: string, demo: number) {
+    return enqueue(squadId, () =>
+      db.transaction(async () => {
+        await prune(squadId);
+        await presence(squadId, demo);
+      })(),
+    );
+  }
+  const changed = (playerId: string) => {
+    const teams = new Map<string, number>();
+    for (const s of io.sockets.sockets.values())
+      if (s.data.playerId === playerId) teams.set(s.data.squadId, s.data.demo);
+    for (const [id, demo] of teams) void refresh(id, demo).catch(() => {});
+  };
+  const revoked = (fingerprint: string) => {
+    for (const s of io.sockets.sockets.values())
+      if (sessionFingerprint(s.handshake.auth.token) === fingerprint) s.disconnect(true);
+  };
+  membershipEvents.on('changed', changed);
+  sessionEvents.on('revoked', revoked);
+  const sweep = setInterval(() => {
+    const teams = new Map<string, number>();
+    for (const s of io.sockets.sockets.values()) teams.set(s.data.squadId, s.data.demo);
+    for (const [id, demo] of teams) void refresh(id, demo).catch(() => {});
+    for (const [id, entry] of budgets) if (Date.now() - entry.at > 60000) budgets.delete(id);
+  }, 15000).unref();
+  server.once('close', () => {
+    clearInterval(sweep);
+    membershipEvents.off('changed', changed);
+    sessionEvents.off('revoked', revoked);
+  });
   io.use(async (socket, next) => {
+    let counted: string | undefined;
     try {
+      if (io.engine.clientsCount > 200) throw Error('Chat capacity reached');
       const p = await authenticate(socket.handshake.auth.token),
         squadId = socket.handshake.auth.squadId;
-      if (typeof squadId !== 'string' || !(await allowed(p.id, squadId, p.demo)))
+      if ((connections.get(p.id) ?? 0) >= 4) throw Error('Too many chat connections');
+      connections.set(p.id, (connections.get(p.id) ?? 0) + 1);
+      counted = p.id;
+      if (
+        typeof squadId !== 'string' ||
+        squadId.length > 100 ||
+        !(await allowed(p.id, squadId, p.demo))
+      )
         throw Error('Team membership required');
       socket.data = { playerId: p.id, squadId, demo: p.demo };
+      socket.once('disconnect', () => releaseConnection(p.id));
       next();
     } catch {
-      next(Error('Sign in and join this team before opening its chat.'));
+      if (counted) releaseConnection(counted);
+      next(Error('Sign in, join this team, and keep at most four chat connections open.'));
     }
   });
   io.on('connection', (socket) => {
     const { squadId, playerId, demo } = socket.data;
-    // Queue room work so async reads cannot reorder history, sends and membership updates.
-    void enqueue(squadId, async () => {
-      await prune(squadId);
-      if (!socket.connected) return;
-      await socket.join(roomName(squadId));
-      const history = (await db
-        .prepare(selectMessage + ' WHERE squad_id=? ORDER BY seq DESC LIMIT 100')
-        .all(squadId)) as TeamMessage[];
-      socket.emit('chat:history', history.reverse().map(normalizeMessage));
-      await presence(squadId, demo);
-    });
+    // Read, authorize and emit inside the same short DB transaction. Membership
+    // changes use this transaction boundary too; no network/storage waits belong here.
+    void enqueue(squadId, () =>
+      db.transaction(async () => {
+        await prune(squadId);
+        if (!socket.connected) return;
+        await socket.join(roomName(squadId));
+        const history = (await db
+          .prepare(selectMessage + ' WHERE squad_id=? ORDER BY seq DESC LIMIT 100')
+          .all(squadId)) as TeamMessage[];
+        // A final check also protects against out-of-band changes during the history read.
+        if (!(await allowed(playerId, squadId, demo))) {
+          socket.disconnect(true);
+          return;
+        }
+        socket.emit('chat:history', history.reverse().map(normalizeMessage));
+        await presence(squadId, demo);
+      })(),
+    ).catch(() => socket.disconnect(true));
     socket.on('chat:send', (data, ack) => {
       if (typeof ack !== 'function') return;
-      void enqueue(squadId, async () => {
-        await prune(squadId);
-        if (!socket.connected || !(await allowed(playerId, squadId, demo))) {
-          ack({ ok: false, error: 'You are no longer a member of this team.' });
-          return;
-        }
-        const parsed = messageSchema.safeParse(data);
-        if (!parsed.success) {
-          ack({ ok: false, error: 'Send 1–500 characters of plain text.' });
-          return;
-        }
-        const { clientId, text } = parsed.data;
-        // The shared adapter serializes this transaction, including across Postgres writers.
-        const outcome = await db.transaction(async () => {
-          if (!(await allowed(playerId, squadId, demo)))
-            return { error: 'You are no longer a member of this team.' };
+      if (!budget(playerId)) {
+        ack({ ok: false, error: 'Too many requests. Please wait.' });
+        return;
+      }
+      const parsed = messageSchema.safeParse(data);
+      if (!parsed.success) {
+        ack({ ok: false, error: 'Send 1–500 characters of plain text.' });
+        return;
+      }
+      const { clientId, text } = parsed.data;
+      void enqueue(squadId, () =>
+        db.transaction(async () => {
+          await prune(squadId);
+          if (!socket.connected || !(await allowed(playerId, squadId, demo))) {
+            ack({ ok: false, error: 'You are no longer a member of this team.' });
+            return;
+          }
           const duplicate = (await db
             .prepare(selectMessage + ' WHERE squad_id=? AND player_id=? AND client_id=?')
             .get(squadId, playerId, clientId)) as TeamMessage | undefined;
-          if (duplicate) return { message: normalizeMessage(duplicate), duplicate: true };
+          if (duplicate) {
+            ack({ ok: true, message: normalizeMessage(duplicate) });
+            return;
+          }
           const now = Date.now();
-          const previous = (await db
+          const previous = await db
             .prepare('SELECT at FROM team_messages WHERE player_id=? ORDER BY at DESC LIMIT 1')
-            .get(playerId)) as { at: number } | undefined;
-          if (now - Number(previous?.at ?? 0) < 1000)
-            return { error: 'Please wait a second before sending another message.' };
+            .get(playerId);
+          if (now - Number(previous?.at ?? 0) < 1000) {
+            ack({ ok: false, error: 'Please wait a second before sending another message.' });
+            return;
+          }
           const message: TeamMessage = {
             id: randomUUID(),
             playerId,
@@ -203,23 +288,14 @@ export function registerTeamChat(server: HttpServer) {
               'INSERT INTO team_messages(id,squad_id,player_id,client_id,name,text,at) VALUES (?,?,?,?,?,?,?)',
             )
             .run(message.id, squadId, playerId, clientId, message.name, text, now);
-          return { message, duplicate: false };
-        })();
-        if (outcome.error || !outcome.message) {
-          ack({ ok: false, error: outcome.error ?? 'Message could not be saved. Please retry.' });
-          return;
-        }
-        // Recheck before delivery because team membership may change while the write awaits.
-        await prune(squadId);
-        if (!outcome.duplicate) io.to(roomName(squadId)).emit('chat:message', outcome.message);
-        ack({ ok: true, message: outcome.message });
-      }).catch(() => ack({ ok: false, error: 'Message could not be saved. Please retry.' }));
+          await prune(squadId);
+          io.to(roomName(squadId)).emit('chat:message', message);
+          ack({ ok: true, message });
+        })(),
+      ).catch(() => ack({ ok: false, error: 'Team chat is busy. Please retry.' }));
     });
     socket.on('disconnect', () => {
-      void enqueue(squadId, async () => {
-        await prune(squadId);
-        await presence(squadId, demo);
-      });
+      void refresh(squadId, demo).catch(() => {});
     });
   });
   return io;

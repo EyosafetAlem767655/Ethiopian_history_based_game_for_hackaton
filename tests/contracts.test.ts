@@ -83,14 +83,18 @@ it('enforces attestor access, result replay protection, and one badge per recipi
         functionName: 'records',
         args: [key],
       });
-    expect(await verifyProof(proof, read)).toMatchObject({
+    expect(await verifyProof(proof, read, address)).toMatchObject({
       local: { status: 'match' },
       chain: 'match',
     });
     // Even changing both the stored score AND its saved hash cannot match the old anchor.
     const changed = { ...payload, scoreline: [580, 490] };
     expect(
-      await verifyProof({ ...proof, payload: canonical(changed), hash: digest(changed) }, read),
+      await verifyProof(
+        { ...proof, payload: canonical(changed), hash: digest(changed) },
+        read,
+        address,
+      ),
     ).toMatchObject({ local: { status: 'match' }, chain: 'mismatch' });
     await expect(
       pub.simulateContract({

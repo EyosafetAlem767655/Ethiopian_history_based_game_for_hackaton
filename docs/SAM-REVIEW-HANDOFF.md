@@ -1,8 +1,45 @@
 # Sam's feature review handoff
 
+## Current update — 30 October 2026
+
+Main was fetched again after the interruptions and remains `04837ad`. `Sam-dev` includes it. The remote branch `feat/frontend-smoke-tests` adds one smoke-test file but is not merged into main; this work does not merge that separate branch.
+
+Implemented in this update:
+
+- Consent-based on-chain profile registration: EIP-712 signatures scoped to player/wallet, Base Sepolia, deployment, nonce and expiry; contract verifies consent and enforces unique immutable ownership. Simulation remains explicit.
+- Earned-badge ERC-1155 claim pipeline and inventory status: source-match integrity and authorization checks, official on-chain source comparison, durable leased jobs, bounded retries, transaction recovery and an independent wallet-balance control. Gathering-only badges remain off-chain.
+- Match-long room chat and bounded reconnect history, separate from persistent private Socket.IO team chat. Restoring canvas focus resumes controls after chat and form use.
+- Room/team authorization and duplicate-admission fixes; match-time squad attribution; real logout/server revocation; strict token parsing; early matchmaking limits/origin checks; team-chat revocation, packet budgets, queue and connection caps.
+- Four-person gathering approval through one transactional implementation; photo-revision consent; fenced photo/document uploads outside the global transaction; durable late/orphan deletion jobs and updated scheduled cleanup.
+- Pinned official proof-contract checks, bounded result submissions and transaction-preserving retry controls. API responses are marked no-store; runtime container uses a non-root user.
+
+**Deployment is coordinated:** apply pending migrations **006, 007, 008** in order; redeploy the cleanup function and frontend/backend together. Live profile registration needs the updated contract bytecode. Configure the same `RECORDS_ADDRESS` and build-time `VITE_RECORDS_ADDRESS`, real metadata URLs, eligible accounts, attestor role/funds and key-management steps. Broadcasting stays disabled by default. No hosted schema was changed and no public blockchain transaction was sent during this work.
+
+Validation: the final full regression run passed **108 tests in 21 files**. Chromium is now available in the local temporary browser cache; **2 browser checks passed**, including real backend wallet-signature verification, simulated profile/badge claims, logout revocation, rendering, arena controls and fullscreen. The wallet provider in that browser test is synthetic; real extension/public-testnet acceptance is still required. TypeScript, lint and the production build passed.
+
+The first broad run exposed an existing test controller that camped one zone and assumed a squad victory. It now chooses capture objectives, aims at nearby opponents and uses current arena geometry; assertions still require a genuine server-recorded win. A focused journey rerun passed, followed by the full 108-test run. Browser testing found and fixed a missing credentialed CORS preflight header and a real canvas-focus problem; the presentation test now explicitly clicks the field after using form controls.
+
+Current security status against the dated audit:
+
+| Findings           | Status                                                                                                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S01–S08            | Core reproduced access/consent/storage/chat/logout failures repaired with regression coverage. Broader account lifecycle and operational hardening remain.        |
+| S09                | Duplicate admissions and changed-roster result attribution repaired; competitive anti-farming policy is still open.                                               |
+| S10                | Official proof contract pinned independently in frontend configuration; legacy hash serialization remains unchanged.                                              |
+| S11                | Reward leases/recovery and bounded result submission improved; full finality/reorg operations, multi-worker result leases and separate admin custody remain open. |
+| S12                | Durable deletion/fencing improved; full server-side image decoding, dimension limits, retention/account deletion policy remain open.                              |
+| S13                | Schema readiness and import coverage improved; hosted least-privilege/backup restoration/integrity checks remain unverified.                                      |
+| S14 / dependencies | Strict parser, private-response cache policy, nosniff and non-root runtime added; full CSP/CI/minimal runtime and dependency upgrades remain open.                |
+
+Still missing product scope: spectators, full replay playback, tournaments, friends/direct invitations/activity notifications and a complete public ranking proof trail. Decide the original 20-level concept versus the current 15-mission adaptation with the gameplay owner. Public frontend/API/WSS URLs and public-testnet deployment/receipt evidence have not been supplied or verified.
+
+Sam's identity/proof/reward/chat code is implemented locally; the dated audit is historical and does not mean these newly repaired issues are still present. Read [lesson 3](LESSON-03-REGISTRATION-REWARDS-AND-SECURITY.md) and [deployment instructions](DEPLOYMENT.md) for the current flow. The earlier handoff below is preserved as history.
+
+---
+
 Prepared 29 October 2026 on `Sam-dev`. Review these additions separately from the teammate's existing campaign/combat implementation. Code comments explain the wallet transaction boundary, nonce consumption, shared socket transport, independent proof checks, and chat keyboard handling.
 
-## Main integration and conflict resolution
+## Historical main integration and conflict resolution — 29 October
 
 Latest fetched `origin/main` is `addddb5` (29 October 2026). Its Render hosting, asynchronous SQLite/Postgres database layer, avatars, age-review flow and result-save acknowledgments are now combined with Sam's six feature commits on `Sam-dev`.
 
@@ -31,7 +68,7 @@ Before a production rollout, apply the pending `005_team_chat.sql` migration and
 
 A subsequent merge commit integrates main and resolves the ten conflicts without squashing these six feature commits. The original commits build on each other in that order; they are separate review units, not six unrelated patches. The shared result/identity helpers are introduced with wallet identity and then used by match proofs.
 
-## What is actually still missing
+## Historical gaps — superseded by the current update above
 
 | Gap                            | Concrete next deliverable                                                                                                                                                     |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -57,7 +94,7 @@ Wallet sign-in/recovery is also absent: linking a wallet does not recover a lost
 
 Sam's next focus is the Web3 identity/result/reward path and chat integration. Agree ownership of spectators, replays, tournaments and social features before extending them.
 
-## Current integrated validation
+## Historical integrated validation — 29 October
 
 Validated on 29 October 2026 after combining main through `addddb5`:
 
@@ -76,7 +113,7 @@ The earlier pre-merge demo test had failed once on its guaranteed squad-win expe
 
 The three slow npm artifacts were downloaded in ranges and each SHA-512 was checked against the pinned lockfile before caching with pnpm. The project lockfile retains registry resolutions, not local temporary artifact paths.
 
-## Manual review still needed
+## Historical manual review checklist
 
 Manual review on this branch:
 

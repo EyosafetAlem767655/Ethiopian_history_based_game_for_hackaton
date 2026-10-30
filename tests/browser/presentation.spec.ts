@@ -45,6 +45,8 @@ test('renders Amharic branding, articulated isometric play, arrows, zoom and scr
   expect(await page.evaluate(() => localStorage.getItem('kibre-volume'))).toBe('0.3');
   await page.getByRole('checkbox', { name: 'REDUCED MOTION' }).check();
   await expect(page.locator('.scroll-guide')).toHaveClass(/reduced-motion/);
+  // Gameplay shortcuts are deliberately suspended while a form control has focus.
+  await canvas.click();
   await page.keyboard.press('f');
   await expect
     .poll(() =>
