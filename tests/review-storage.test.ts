@@ -35,7 +35,7 @@ vi.mock('@supabase/supabase-js', () => ({
     },
   }),
 }));
-it('serializes late evidence uploads with decisions, checks MFA/self-review and deletes evidence on approval/withdrawal', async () => {
+it('fences late uploads without blocking unrelated users, checks MFA/self-review and deletes evidence on decisions', async () => {
   process.env.DB_PATH = ':memory:';
   process.env.PERSISTENCE = 'sqlite';
   process.env.SUPABASE_URL = 'https://fixture.invalid';
@@ -120,11 +120,15 @@ it('serializes late evidence uploads with decisions, checks MFA/self-review and 
       reviewed = true;
       return r;
     });
-    await new Promise((r) => setTimeout(r, 30));
-    expect(reviewed).toBe(false);
-    release();
-    expect((await uploading).status).toBe(200);
+    // An external storage request must not hold the global transaction lock.
+    const other = await store.createProfile('Unrelated user', false);
+    await store.db.transaction(async () =>
+      store.db.prepare('UPDATE profiles SET hero=1 WHERE id=?').run(other.id),
+    )();
     expect((await rejecting).status).toBe(200);
+    expect(reviewed).toBe(true);
+    release();
+    expect((await uploading).status).toBe(400);
     expect(fixture.objects.size).toBe(0);
     expect(
       await store.db

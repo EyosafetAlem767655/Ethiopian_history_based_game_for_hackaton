@@ -1,5 +1,11 @@
 import { assertHumanBand, readAvatar } from './customization';
 import { ageBands } from '../../../packages/shared/src/customization';
+import {
+  guardRoomSession,
+  recheckRoomSession,
+  forgetRoomSessions,
+  forgetClientSession,
+} from './session-guard';
 import { Room, type Client } from '@colyseus/core';
 import { z } from 'zod';
 import {
@@ -12,6 +18,7 @@ import {
 } from '../../../packages/shared/src/game';
 import { campaignWorld, stepCampaign, equipCampaign } from '../../../packages/shared/src/campaign';
 import { MISSIONS, missionEligibility } from '../../../packages/shared/src/missions';
+import { installRoomChat } from './room-chat';
 import { PROTOCOL_VERSION } from '../../../packages/shared/src/presentation';
 import {
   authenticate,
@@ -34,6 +41,7 @@ export class CampaignRoom extends Room {
   events: GameEvent[] = [];
   seen = new Set<string>();
   roles = shuffledRoles();
+  sendChatHistory!: (client: Client) => void;
   onCreate(o: {
     ageBand?: string;
     missionId: number;
@@ -53,6 +61,7 @@ export class CampaignRoom extends Room {
       ageBand: o.ageBand ?? 'solo',
     });
     if (!o.squadId) void this.setPrivate(true);
+    this.sendChatHistory = installRoomChat(this, !!o.squadId);
     this.onMessage('input', (c, data) => {
       const parsed = inputSchema.safeParse(data),
         id = this.ids.get(c.sessionId);
@@ -98,6 +107,7 @@ export class CampaignRoom extends Room {
       if (!s || !JSON.parse(s.members).includes(p.id) || o.squadId !== this.metadata.squadId)
         throw Error('Squad membership required');
     }
+    guardRoomSession(this, _c, o.token);
     return p;
   }
   async onJoin(
@@ -108,6 +118,7 @@ export class CampaignRoom extends Room {
     auth: Profile,
   ) {
     const p = auth ?? (c.auth as Profile);
+    if ([...this.ids.values()].includes(p.id)) throw Error('Already participating in this mission');
     this.ids.set(c.sessionId, p.id);
     const replacement = this.w.players.find((f) => f.bot && f.id.startsWith('bot') && f.team === 0);
     if (replacement) this.w.players = this.w.players.filter((f) => f.id !== replacement.id);
@@ -128,6 +139,7 @@ export class CampaignRoom extends Room {
       f.hp = replacement.hp;
     }
     f.avatar = p.avatar;
+    if (this.metadata.squadId) f.squadId = this.metadata.squadId;
     this.w.players.push(f);
     const progress = await campaignProgress(p.id);
     f.prestige = progress.honor + (progress.contribution ?? 0);
@@ -135,6 +147,7 @@ export class CampaignRoom extends Room {
     await db.prepare('UPDATE profiles SET hero=? WHERE id=?').run(p.hero, p.id);
     c.send('identity', { id: p.id, room: this.roomId });
     c.send('snapshot', this.w);
+    this.sendChatHistory(c);
   }
   async onLeave(c: Client, consented: boolean) {
     const id = this.ids.get(c.sessionId),
@@ -142,16 +155,29 @@ export class CampaignRoom extends Room {
     if (!p) return;
     this.inputs.delete(p.id);
     p.bot = true;
+    let next: Client | undefined;
     if (!consented)
       try {
-        const next = await this.allowReconnection(c, 30);
+        next = await this.allowReconnection(c, 30);
+        await recheckRoomSession(this, c, next);
         if (this.maxClients > 1) await assertHumanBand(p.id, this.metadata.ageBand);
+        if (this.metadata.squadId) {
+          const squad = await db
+            .prepare('SELECT members FROM squads WHERE id=?')
+            .get(this.metadata.squadId);
+          if (!squad || !JSON.parse(squad.members).includes(p.id))
+            throw Error('Squad membership changed');
+        }
         p.bot = false;
         next.send('snapshot', this.w);
+        this.sendChatHistory(next);
         if (this.recorded) next.send('result', { matchId: this.roomId });
+        return;
       } catch {
+        next?.leave(4001, 'Session or membership changed');
         /* retained AI substitution */
       }
+    forgetClientSession(this, c);
   }
   update() {
     if (this.w.finished) {
@@ -214,5 +240,8 @@ export class CampaignRoom extends Room {
     } finally {
       this.saving = false;
     }
+  }
+  onDispose() {
+    forgetRoomSessions(this);
   }
 }

@@ -26,6 +26,12 @@ const tables = [
   'wallets',
   'wallet_nonces',
   'avatars',
+  'age_reviews',
+  'team_messages',
+  'revoked_sessions',
+  'web3_jobs',
+  'web3_challenges',
+  'media_deletions',
 ];
 const existing = new Set(
   (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as any[]).map(
@@ -37,7 +43,12 @@ if (integrity !== 'ok') throw Error('Source integrity check failed');
 const rows = Object.fromEntries(
   tables
     .filter((t) => existing.has(t))
-    .map((t) => [t, db.prepare(`SELECT * FROM ${t}`).all() as Record<string, unknown>[]]),
+    .map((t) => [
+      t,
+      db
+        .prepare(`SELECT * FROM ${t}${t === 'team_messages' ? ' ORDER BY seq' : ''}`)
+        .all() as Record<string, unknown>[],
+    ]),
 );
 const fingerprint = createHash('sha256').update(JSON.stringify(rows)).digest('hex');
 console.log('Source checked. Mode:', apply ? 'APPLY' : 'DRY RUN', 'fingerprint:', fingerprint);
@@ -83,20 +94,28 @@ try {
       ).map((c) => c.column_name as string);
       for (const value of values) {
         if (table === 'hosted_identities' && !value.auth_id) value.auth_id = null;
-        const keys = Object.keys(value).filter((k) => columns.includes(k));
+        // Preserve message order while letting Postgres allocate its own sequence.
+        const keys = Object.keys(value).filter(
+          (k) => columns.includes(k) && !(table === 'team_messages' && k === 'seq'),
+        );
         const primary =
-          table === 'participants'
-            ? ['match_id', 'player_id']
-            : table === 'badges'
-              ? ['player_id', 'badge']
-              : table === 'campaign_progress' ||
-                  table === 'wallets' ||
-                  table === 'wallet_nonces' ||
-                  table === 'avatars'
-                ? ['player_id']
-                : table === 'outbox' || table === 'hosted_outbox'
-                  ? ['match_id']
-                  : ['id'];
+          table === 'media_deletions'
+            ? ['bucket', 'path']
+            : table === 'revoked_sessions'
+              ? ['digest']
+              : table === 'participants'
+                ? ['match_id', 'player_id']
+                : table === 'badges'
+                  ? ['player_id', 'badge']
+                  : table === 'campaign_progress' ||
+                      table === 'wallets' ||
+                      table === 'wallet_nonces' ||
+                      table === 'avatars' ||
+                      table === 'web3_challenges'
+                    ? ['player_id']
+                    : table === 'outbox' || table === 'hosted_outbox'
+                      ? ['match_id']
+                      : ['id'];
         const old = await sql.unsafe(
           `SELECT * FROM game_runtime.${table} WHERE ` +
             primary.map((k, n) => `${k}=$${n + 1}`).join(' AND '),

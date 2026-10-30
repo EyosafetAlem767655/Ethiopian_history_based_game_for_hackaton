@@ -15,6 +15,8 @@ const chainMessages: Record<ProofVerification['chain'], string> = {
   'not-checked': 'Blockchain check skipped because the result could not be validated.',
   simulated: 'Simulated result. There is no on-chain proof.',
   unconfigured: 'Blockchain check unavailable: no contract is configured.',
+  untrusted:
+    'The proof points to a different contract than the official game deployment. Verification failed.',
   'not-found': 'No on-chain record found yet. You can check again later.',
   match: 'The result hash and winners match the on-chain record.',
   mismatch: 'The on-chain record differs from this result. Verification failed.',
@@ -23,6 +25,8 @@ const chainMessages: Record<ProofVerification['chain'], string> = {
 
 export function MatchRecord({ record }: { record: HistoryRecord }) {
   const [checking, setChecking] = useState(false),
+    [retrying, setRetrying] = useState(false),
+    [queued, setQueued] = useState(false),
     [verification, setVerification] = useState<ProofVerification | null>(null),
     [contract, setContract] = useState(''),
     [error, setError] = useState('');
@@ -76,6 +80,26 @@ export function MatchRecord({ record }: { record: HistoryRecord }) {
         <br />
         {record.hash}
       </p>
+      {record.status === 'failed' && !payload?.demo && (
+        <button
+          className="outline-btn"
+          disabled={retrying || queued}
+          onClick={async () => {
+            setRetrying(true);
+            setError('');
+            try {
+              await api('/results/' + encodeURIComponent(record.id) + '/retry', {});
+              setQueued(true);
+            } catch (e) {
+              setError((e as Error).message);
+            } finally {
+              setRetrying(false);
+            }
+          }}
+        >
+          {queued ? 'SUBMISSION QUEUED · CHECK AGAIN LATER' : 'RETRY TESTNET SUBMISSION'}
+        </button>
+      )}
       <div className="result-identities">
         <h3>Players at match finish</h3>
         {payload?.participants.map((p) => (

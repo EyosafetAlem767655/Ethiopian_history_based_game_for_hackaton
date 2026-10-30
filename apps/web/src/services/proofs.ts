@@ -18,6 +18,7 @@ export interface ProofVerification {
     | 'not-checked'
     | 'simulated'
     | 'unconfigured'
+    | 'untrusted'
     | 'not-found'
     | 'match'
     | 'mismatch'
@@ -36,6 +37,7 @@ export const readBaseAnchor: AnchorReader = (contract, key) =>
 export async function verifyProof(
   data: unknown,
   readAnchor: AnchorReader = readBaseAnchor,
+  trustedContract: string | undefined = import.meta.env.VITE_RECORDS_ADDRESS,
 ): Promise<ProofVerification> {
   const validated = proofSchema.safeParse(data);
   if (!validated.success) return { local: { status: 'invalid' }, chain: 'not-checked' };
@@ -45,6 +47,10 @@ export async function verifyProof(
   if (proof.simulated || proof.status === 'simulated' || local.payload!.demo)
     return { local, chain: 'simulated' };
   if (!proof.chain) return { local, chain: 'unconfigured' };
+  if (!trustedContract || !/^0x[0-9a-fA-F]{40}$/.test(trustedContract))
+    return { local, chain: 'unconfigured' };
+  if (proof.chain.contract.toLowerCase() !== trustedContract.toLowerCase())
+    return { local, chain: 'untrusted' };
   try {
     // The database's "confirmed" label is not used as evidence. Read the contract.
     const [resultHash, winner, timestamp, attestor] = await readAnchor(

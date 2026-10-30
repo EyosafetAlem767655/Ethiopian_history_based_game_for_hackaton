@@ -18,5 +18,14 @@ Deno.serve(async (req) => {
     const ack = await client.rpc('ack_age_evidence', { p_id: row.id, p_path: row.path });
     if (!ack.error) deleted++;
   }
+  // Includes fenced late-upload reservations and gathering-photo withdrawals.
+  const media = await client.rpc('pending_media_deletions');
+  if (media.error) return Response.json({ok: false, deleted}, {status: 500});
+  for (const row of media.data ?? []) {
+    const out = await client.storage.from(row.bucket).remove([row.path]);
+    if (out.error) continue;
+    const ack = await client.rpc('ack_media_deletion', {p_bucket: row.bucket, p_path: row.path});
+    if (!ack.error) deleted++;
+  }
   return Response.json({ ok: true, deleted });
 });

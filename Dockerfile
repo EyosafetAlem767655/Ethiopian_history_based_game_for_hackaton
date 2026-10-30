@@ -15,9 +15,11 @@ COPY apps/web apps/web
 ARG VITE_SUPABASE_URL
 ARG VITE_SUPABASE_PUBLISHABLE_KEY
 ARG VITE_SUPABASE_ANON_KEY
+ARG VITE_RECORDS_ADDRESS
 RUN pnpm build
 COPY apps/server apps/server
 COPY scripts/backup.ts scripts/backup.ts
 ENV NODE_ENV=production
+USER node
 EXPOSE 2567
 CMD ["node","--import","tsx","apps/server/src/index.ts"]
