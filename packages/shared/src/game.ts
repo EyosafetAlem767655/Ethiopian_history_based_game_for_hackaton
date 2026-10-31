@@ -96,6 +96,10 @@ export interface World {
   wind?: { x: number; y: number };
   /** Campaign multiplier for monster damage, from 0.6 (first mission) to 1 (last). */
   monsterDamage?: number;
+  /** Hold-the-ground missions: defenders take reduced damage and survive one killing blow per wave. */
+  defenderGuard?: { resist: number; wave: number; saved: Record<string, number> };
+  /** Campaign chapters where the hero throws an aimed spear on foot, as in the mounted joust. */
+  spearThrow?: boolean;
   campaign?: CampaignState;
   mode: Mode;
   demo: boolean;
@@ -387,6 +391,10 @@ export function event(
   w.events.push({ tick: w.tick, kind, x, y, actor, amount, text });
   if (w.events.length > 80) w.events.shift();
 }
+/** Riders and, on spear-throw missions, the human heroes hurl a spear along their aim. */
+export function throwsSpear(p: Fighter, w: World) {
+  return !!p.mount || (!!w.spearThrow && !p.bot && p.team === 0);
+}
 export function damage(w: World, p: Fighter, t: Fighter, amount: number) {
   if (t.hp <= 0 || t.invulnerable > 0) return;
   const blocked = t.block && Math.abs(angleDiff(Math.atan2(p.y - t.y, p.x - t.x), t.aim)) < 1.2;
@@ -397,6 +405,18 @@ export function damage(w: World, p: Fighter, t: Fighter, amount: number) {
   // Campaign monsters hit softer in early missions (see campaign difficulty ramp).
   if (p.kind && p.kind !== 'warrior' && p.kind !== 'civilian' && w.monsterDamage)
     amount = Math.max(1, Math.round(amount * w.monsterDamage));
+  const guard = w.defenderGuard;
+  if (guard && t.team === 0 && t.kind !== 'civilian') {
+    amount = Math.max(1, Math.round(amount * guard.resist));
+    // Second wind: the first killing blow each wave leaves the defender standing.
+    if (amount >= t.hp && guard.saved[t.id] !== guard.wave) {
+      guard.saved[t.id] = guard.wave;
+      t.hp = Math.max(t.hp, 21);
+      amount = 1;
+      t.invulnerable = 2;
+      event(w, 'rescue', t.x, t.y, t.id, 0, 'Second wind');
+    }
+  }
   t.hp = Math.max(0, t.hp - amount);
   p.damage += amount;
   p.contribution += amount;
@@ -471,12 +491,13 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
         p.attack = 0.34;
         p.attackId++;
         p.hits = [];
-        event(w, p.mount || p.role === 'archer' ? 'throw' : 'swing', p.x, p.y, p.id);
-        if ((p.mount || p.role === 'archer') && w.mode !== 'duel' && w.mode !== 'tutorial')
+        const thrown = throwsSpear(p, w);
+        event(w, thrown || p.role === 'archer' ? 'throw' : 'swing', p.x, p.y, p.id);
+        if ((thrown || p.role === 'archer') && w.mode !== 'duel' && w.mode !== 'tutorial')
           w.projectiles.push({
             id: w.tick * 100 + w.players.indexOf(p),
             owner: p.id,
-            kind: p.mount ? 'spear' : p.kind === 'caster' ? 'magic' : 'arrow',
+            kind: thrown ? 'spear' : p.kind === 'caster' ? 'magic' : 'arrow',
             team: p.team,
             x: p.x,
             y: p.y,
@@ -490,7 +511,7 @@ export function step(w: World, inputs: Map<string, Input>, dt = DT) {
       p.attack -= dt;
       if (p.attack < 0.23 && p.attack > 0.09) {
         const ranged =
-          (p.mount || p.role === 'archer') && w.mode !== 'duel' && w.mode !== 'tutorial';
+          (throwsSpear(p, w) || p.role === 'archer') && w.mode !== 'duel' && w.mode !== 'tutorial';
         if (!ranged) {
           for (const t of w.players)
             if (

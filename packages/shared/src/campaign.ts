@@ -116,6 +116,9 @@ export function campaignWorld(id: number, demo: boolean, seed = Date.now()): Wor
   if (m.kind === 'conquest') w.time = demo ? 120 : 180;
   w.wind = m.biome === 'wind' ? { x: 0, y: demo ? 35 : 65 } : undefined;
   w.monsterDamage = 0.6 + 0.4 * missionTier(id);
+  // From Chapter 2 on foot, the hero keeps the joust's aimed spear throw.
+  if (m.chapter === 2) w.spearThrow = true;
+  if (m.kind === 'outpost') w.defenderGuard = { resist: 0.6, wave: 0, saved: {} };
   const c: CampaignState = {
     version: 1,
     missionId: id,
@@ -786,6 +789,8 @@ export function stepCampaign(w: World, humanInputs: Map<string, Input>, dt = DT)
     const ford = c.markers[0],
       waves = 3,
       raiders = aliveEnemies().filter((p) => distance(p, ford) < 95).length;
+    // Each new wave restores the defenders' second wind.
+    if (w.defenderGuard) w.defenderGuard.wave = c.wave;
     if (raiders) ford.value = Math.max(0, (ford.value ?? 100) - raiders * (w.demo ? 3 : 5) * dt);
     ford.label = `The ford · ${Math.ceil(ford.value ?? 0)}%`;
     if ((ford.value ?? 0) <= 0) {

@@ -9,6 +9,7 @@ import Phaser from 'phaser';
 import type { Room } from 'colyseus.js';
 import {
   move,
+  throwsSpear,
   obstacles as arenaObstacles,
   WIDTH,
   HEIGHT,
@@ -97,6 +98,10 @@ function slashPose(t: number) {
     [0.72, { u: 5.75, b: -0.35, grip: Math.PI, lean: 0.18 }, smooth],
     [1, { u: 0.15 + TAU, b: -0.35, grip: TAU - 0.05, lean: 0 }, smooth],
   ]);
+}
+/** From Arsi · Banner Conquest (mission 6) on, mark who is a squadmate and who is an enemy. */
+function teamMarkers(w: World) {
+  return w.mode === 'campaign' && (w.campaign?.missionId ?? 0) >= 6;
 }
 /** Spear and lance: draw back to the chest, drive straight out, recover. */
 function thrustPose(t: number) {
@@ -348,10 +353,10 @@ export class IsoArena extends Phaser.Scene {
       }
     }
     this.fx.clear();
-    const rider = w.players.find((q) => q.id === this.mine && q.mount && q.hp > 0),
-      from = rider && this.rendered.get(rider.id);
+    const thrower = w.players.find((q) => q.id === this.mine && throwsSpear(q, w) && q.hp > 0),
+      from = thrower && this.rendered.get(thrower.id);
     if (from) {
-      // Mounted aiming guide: the spear leaves along this line (wind bends it slightly).
+      // Spear aiming guide: the spear leaves along this line (wind bends it slightly).
       this.fx.fillStyle(0xfff1c4, 0.75);
       for (let d = 40; d <= 220; d += 22) {
         const dot = project(
@@ -567,7 +572,8 @@ export class IsoArena extends Phaser.Scene {
     image.setScale(Math.min(width / image.frame.width, height / image.frame.height));
     return image;
   }
-  createRig(p: Fighter) {
+  createRig(p: Fighter, w: World) {
+    const spear = p.role === 'spear' || throwsSpear(p, w);
     const root = this.add.container(),
       parts: Record<string, Phaser.GameObjects.Image> = {};
     const add = (
@@ -601,15 +607,7 @@ export class IsoArena extends Phaser.Scene {
     add('torso', [0, 11, 10, 14][p.hero] ?? 0, 65, 53, 0, -78, 0.08);
     add('upperArm', 1, 24, 29, 23, -66, 0.08);
     add('forearm', 2, 21, 28, 23, -44, 0.08);
-    add(
-      'weapon',
-      p.mount || p.role === 'spear' ? 8 : 7,
-      19,
-      p.mount || p.role === 'spear' ? 88 : 66,
-      23,
-      -22,
-      0.88,
-    );
+    add('weapon', spear ? 8 : 7, 19, spear ? 88 : 66, 23, -22, 0.88);
     add('shield', 3, 35, 43, -26, -40, 0.5);
     const spec = p.avatar ?? {
       ...defaultAvatar,
@@ -689,7 +687,7 @@ export class IsoArena extends Phaser.Scene {
   drawActor(p: Fighter, x: number, y: number, time: number, w: World) {
     let rig = this.rigs.get(p.id);
     if (!rig) {
-      rig = this.createRig(p);
+      rig = this.createRig(p, w);
       this.rigs.set(p.id, rig);
     }
     if (p.hp <= 0) {
@@ -726,7 +724,7 @@ export class IsoArena extends Phaser.Scene {
       alive = p.hp > 0,
       active = moving && alive && p.stun <= 0,
       run = active && !p.mount ? Phaser.Math.Clamp((speed - 90) / 150, 0, 1) : 0,
-      spear = p.role === 'spear' || !!p.mount;
+      spear = p.role === 'spear' || throwsSpear(p, w);
     // Swings run on a client clock started by each new attack, so the arc is smooth between
     // 15 Hz snapshots. The local player starts it on click instead of waiting a round trip.
     if (p.attackId !== rig.attackId) {
@@ -934,6 +932,17 @@ export class IsoArena extends Phaser.Scene {
       46 * Math.min(1, p.hp / (p.maxHp ?? 100)),
       3,
     );
+    if (alive && p.id !== this.mine && p.kind !== 'civilian' && teamMarkers(w)) {
+      // Floating sign: a green chevron over squadmates, a red one over every enemy.
+      const ally = p.team === 0,
+        top = point.y - (p.mount ? 150 : 120) + Math.sin(time * 0.006 + p.x) * 3;
+      this.fx.fillStyle(ally ? 0x5fe39a : 0xff5a4a, 0.95);
+      this.fx.lineStyle(2, 0x10231f, 0.9);
+      this.fx.fillTriangle(point.x - 9, top - 12, point.x + 9, top - 12, point.x, top);
+      this.fx.strokeTriangle(point.x - 9, top - 12, point.x + 9, top - 12, point.x, top);
+      rig.label.setText((ally ? 'ALLY · ' : 'ENEMY · ') + p.name);
+      rig.label.setColor(ally ? '#a8f5c6' : '#ffb3a6');
+    }
     if (p.id === this.mine) {
       this.fx.lineStyle(2, 0xf7d58b, 0.8);
       this.fx.strokeEllipse(point.x, point.y + 5, p.mount ? 85 : 55, p.mount ? 35 : 24);
@@ -951,7 +960,7 @@ export class IsoArena extends Phaser.Scene {
       this.fx.lineStyle(12, 0xffbf48, 0.2);
       this.fx.lineBetween(point.x, point.y - 35, point.x + a.x, point.y + a.y - 35);
       this.fx.lineStyle(3, 0xfff4bd, 0.95);
-      if (p.role === 'spear' || p.mount)
+      if (spear)
         this.fx.lineBetween(point.x, point.y - 32, point.x + a.x * 1.25, point.y + a.y * 1.25 - 32);
       else {
         this.fx.beginPath();

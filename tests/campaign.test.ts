@@ -13,7 +13,7 @@ import {
   missionEligibility,
   MISSIONS,
 } from '../packages/shared/src/missions';
-import { fighter, move, step, wall, DT, type Input } from '../packages/shared/src/game';
+import { fighter, move, step, wall, damage, DT, type Input } from '../packages/shared/src/game';
 import { project, unproject, screenMovement } from '../packages/shared/src/presentation';
 const make = (id: number, demo = true) => {
   const w = campaignWorld(id, demo, 71);
@@ -273,4 +273,49 @@ it('holds the ford: raiders drain it, clearing every wave wins', () => {
   expect(won.finished).toBe(true);
   expect(won.winner).toBe(0);
   expect(won.campaign!.wave).toBe(3);
+});
+it('gives ford defenders damage resistance and one second wind per wave', () => {
+  const w = make(5, false),
+    p = w.players[0];
+  stepCampaign(w, new Map());
+  const monster = w.players.find((q) => q.team === 1)!;
+  // A heavy blow is reduced by 40% (after the early-mission monster scaling).
+  p.hp = 100;
+  damage(w, monster, p, 50);
+  expect(100 - p.hp).toBeLessThan(25);
+  // The first killing blow this wave leaves the defender standing and briefly invulnerable.
+  p.hp = 5;
+  p.invulnerable = 0;
+  damage(w, monster, p, 80);
+  expect(p.hp).toBeGreaterThan(0);
+  expect(p.invulnerable).toBeGreaterThan(0);
+  // A second killing blow in the same wave is not saved.
+  p.hp = 5;
+  p.invulnerable = 0;
+  damage(w, monster, p, 80);
+  expect(p.hp).toBe(0);
+  // The next wave restores it.
+  p.hp = 5;
+  w.defenderGuard!.wave++;
+  damage(w, monster, p, 80);
+  expect(p.hp).toBeGreaterThan(0);
+});
+
+it('lets Chapter 2 heroes throw an aimed spear on foot', () => {
+  const w = make(6, false),
+    p = w.players[0];
+  expect(p.mount).toBeFalsy();
+  p.cooldown = 0;
+  p.stamina = 100;
+  stepCampaign(w, new Map([[p.id, { ...emptyInput(w.tick + 1), attack: true, aim: Math.PI / 2 }]]));
+  const spear = w.projectiles.find((a) => a.owner === p.id);
+  expect(spear?.kind).toBe('spear');
+  expect(spear!.vy).toBeGreaterThan(500);
+  // Chapter 1 on foot still swings in melee.
+  const ford = make(5, false),
+    q = ford.players[0];
+  q.cooldown = 0;
+  q.stamina = 100;
+  stepCampaign(ford, new Map([[q.id, { ...emptyInput(ford.tick + 1), attack: true }]]));
+  expect(ford.projectiles.some((a) => a.owner === q.id)).toBe(false);
 });
