@@ -139,6 +139,24 @@ class BattleAudio {
       if (!document.hidden && this.context?.state === 'running')
         this.nextNote = this.context.currentTime + 0.15;
     });
+    // Browsers only allow sound after a gesture: start the music on the first click, tap or
+    // key press anywhere, not just on the buttons that start a match.
+    const events = ['pointerdown', 'keydown', 'touchend'] as const;
+    const start = () => {
+      this.unlock();
+      if (this.context?.state === 'running') stop();
+      else void this.context?.resume().then(() => this.context?.state === 'running' && stop());
+    };
+    const stop = () => events.forEach((e) => window.removeEventListener(e, start, true));
+    events.forEach((e) => window.addEventListener(e, start, true));
+    // Where the browser already permits autoplay, the music starts without any interaction.
+    this.unlock();
+    this.context?.addEventListener('statechange', () => {
+      if (this.context?.state === 'running') {
+        this.nextNote = this.context.currentTime + 0.1;
+        stop();
+      }
+    });
   }
   updateMusicVolume() {
     if (!this.context || !this.musicGain) return;
